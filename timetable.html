@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>منشئ جدول الدروس — صفحة مستقلة</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>منشئ جدول الدروس الأسبوعي</h1>
+      <div class="projects-bar">
+        <label for="projectSelect" class="proj-label">المشاريع:</label>
+        <select id="projectSelect" class="proj-select"></select>
+        <button id="newProjectBtn" class="btn">جديد</button>
+        <button id="renameProjectBtn" class="btn">إعادة تسمية</button>
+        <button id="duplicateProjectBtn" class="btn">نسخ</button>
+        <button id="deleteProjectBtn" class="btn danger">حذف</button>
+      </div>
+    </header>
+
+    <!-- يظهر فقط في الطباعة -->
+    <div class="print-title">جدول الدروس الأسبوعي</div>
+
+    <div class="layout">
+      <aside class="sidebar">
+        <nav class="tabs-nav">
+          <button class="tab-link active" data-target="setup-section">الإعدادات</button>
+          <button class="tab-link" data-target="classes-section">الصفوف</button>
+          <button class="tab-link" data-target="subjects-section">المواد الدراسية</button>
+          <button class="tab-link" data-target="teachers-section">المعلمون</button>
+          <button class="tab-link" data-target="progress-section">مشاهدة المنجز</button>
+        </nav>
+      </aside>
+
+      <main class="container">
+        <!-- القسم الأول: إعدادات المدرسة -->
+        <section class="card tab-section" id="setup-section">
+          <h2>القسم الأول: إعدادات المدرسة</h2>
+          <form id="setup-form">
+            <div class="form-row">
+              <label for="schoolType">نوع المدرسة</label>
+              <select id="schoolType">
+                <option value="">— اختر نوع المدرسة —</option>
+                <option value="ابتدائية">ابتدائية</option>
+                <option value="متوسطة">متوسطة</option>
+                <option value="اعدادية">إعدادية</option>
+                <option value="ثانوية">ثانوية</option>
+              </select>
+            </div>
+
+            <div class="form-row hidden-row" id="branchesRow">
+              <label>فروع الإعدادية (اختياري)</label>
+              <div class="checkbox-grid" id="schoolBranches">
+                <label><input type="checkbox" value="علمي"/> <span>علمي</span></label>
+                <label><input type="checkbox" value="أدبي"/> <span>أدبي</span></label>
+              </div>
+              <small class="hint">تنطبق الفروع على الصفوف الرابع والخامس والسادس فقط.</small>
+            </div>
+            <div class="form-row">
+              <label for="schoolName">اسم المدرسة</label>
+              <input type="text" id="schoolName" name="schoolName" placeholder="اكتب اسم المدرسة" required />
+            </div>
+
+            <div class="form-row">
+              <label>أيام الدوام في الأسبوع</label>
+              <div class="days-grid" id="workingDays">
+                <!-- ستُملأ ديناميكيًا بواسطة JavaScript -->
+              </div>
+              <small class="hint">اختر أيام الدوام (يمكن تعطيل الجمعة/السبت أو أي يوم بإزالة الإشارة).</small>
+            </div>
+
+            <div class="form-row">
+              <label for="slotsPerDay">عدد الحصص في اليوم</label>
+              <input type="number" id="slotsPerDay" name="slotsPerDay" min="1" max="12" step="1" required />
+            </div>
+
+            <div class="form-row">
+              <label>حساب تلقائي لأوقات الحصص</label>
+              <div class="calc-fields">
+                <div>
+                  <label for="firstLessonStart" class="visually-hidden">بداية أول حصة</label>
+                  <input type="time" id="firstLessonStart" />
+                  <small class="hint">بداية أول حصة</small>
+                </div>
+                <div>
+                  <label for="lessonDuration" class="visually-hidden">مدة الحصة (دقيقة)</label>
+                  <input type="number" id="lessonDuration" min="1" max="180" step="1" placeholder="مدة الحصة" />
+                  <small class="hint">مدة الحصة (دقيقة)</small>
+                </div>
+                <div>
+                  <label for="breakDuration" class="visually-hidden">الفرصة بين الحصص (دقيقة)</label>
+                  <input type="number" id="breakDuration" min="0" max="60" step="1" placeholder="الفرصة" />
+                  <small class="hint">الفرصة بين الحصص (دقيقة)</small>
+                </div>
+                <div class="calc-actions">
+                  <button type="button" id="autoCalcSlotTimesBtn" class="btn">احسب الأوقات تلقائيًا</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-row">
+              <label>أوقات الحصص</label>
+              <div id="slotTimesContainer">
+                <!-- جدول أوقات الحصص يتولد ديناميكيًا -->
+              </div>
+              <small class="hint">يمكنك حسابها تلقائيًا أعلاه أو تعديل وقت بداية ونهاية كل حصة يدويًا. يتم حفظها عند الضغط على "حفظ الإعدادات".</small>
+            </div>
+
+            <div class="actions">
+              <button type="submit" id="saveSettingsBtn" class="primary">حفظ الإعدادات</button>
+              <span id="setupSaveFeedback" class="save-feedback hidden">تم الحفظ ✓</span>
+            </div>
+          </form>
+
+          <div class="preview">
+            <h3>معاينة سريعة</h3>
+            <p><strong>المدرسة:</strong> <span id="previewSchoolName">—</span></p>
+            <p><strong>أيام الدوام:</strong> <span id="previewDays">—</span></p>
+            <p><strong>عدد الحصص/اليوم:</strong> <span id="previewSlots">—</span></p>
+          </div>
+        </section>
+
+        <!-- تبويب الصفوف -->
+        <section class="card tab-section hidden" id="classes-section">
+          <h2>الصفوف</h2>
+          <div class="actions">
+            <button type="button" id="autoGenerateClassesBtn" class="btn">إنشاء الصفوف تلقائيًا من الإعدادات</button>
+          </div>
+          <form id="class-form" class="inline-form">
+            <input type="text" id="className" placeholder="اسم الصف الأساسي (مثال: الرابع العلمي)" required />
+            <input type="number" id="classSectionsCount" min="1" max="20" value="1" title="عدد الشُعب" />
+            <button type="submit" id="classSubmitBtn" class="primary">إضافة</button>
+            <button type="button" id="cancelEditClassBtn" class="btn secondary hidden">إلغاء التعديل</button>
+          </form>
+          <div id="classesList" class="list"></div>
+        </section>
+
+        <!-- تبويب المواد الدراسية -->
+        <section class="card tab-section hidden" id="subjects-section">
+          <h2>المواد الدراسية</h2>
+          <form id="subject-form" class="inline-form">
+            <input type="text" id="subjectName" placeholder="اسم المادة (مثال: رياضيات)" required />
+            <button type="submit" class="primary">إضافة مادة</button>
+          </form>
+          <div class="hint catalog-hint">مواد جاهزة (فعّل/ألغِ ما يلزم، وستُضاف/تُزال من هذا المشروع):</div>
+          <div id="subjectsCatalog" class="list"></div>
+          <div id="subjectsList" class="list"></div>
+        </section>
+
+        <!-- تبويب المعلمون -->
+        <section class="card tab-section hidden" id="teachers-section">
+          <h2>المعلمون</h2>
+          <form id="teacher-form">
+            <div class="form-row">
+              <label for="teacherName">اسم المعلم</label>
+              <input type="text" id="teacherName" placeholder="اكتب اسم المعلم" required />
+            </div>
+
+            <div class="form-row">
+              <label>الصفوف والشُعب التي يدرّسها</label>
+              <div id="teacherClasses" class="checkbox-grid"></div>
+              <small class="hint">اختر الصفوف، ستظهر الشُعب المرتبطة عند اختيار المواد لتحديد حصص كل شعبة.</small>
+            </div>
+
+            <div class="form-row">
+              <label>المواد وعدد الحصص لكل شُعبة/أسبوع</label>
+              <div id="teacherSubjects" class="subject-assignments"></div>
+              <small class="hint">لكل مادة حدّد عدد الحصص لكل شُعبة يدرّسها المعلم (يمكن ترك بعض الشعب صفرًا).</small>
+            </div>
+
+            <div class="form-row">
+              <label>أيام عدم التواجد (OFF)</label>
+              <div id="teacherOffDays" class="checkbox-grid"></div>
+            </div>
+
+            <div class="form-row">
+              <label>حصص غير مسموح للمعلم التدريس فيها</label>
+              <div id="teacherForbiddenSlots" class="checkbox-grid"></div>
+              <small class="hint">مثال: منع الحصة الأولى أو الأخيرة أو أي حصص أخرى.</small>
+            </div>
+
+            <div class="form-row">
+              <label>منع حسب اليوم/الحصة</label>
+              <div id="teacherForbiddenDaySlots"></div>
+              <small class="hint">ضع إشارة على مربعات الأيام/الحصص التي لا يمكن للمعلم التدريس فيها (مثال: الأحد الحصة الثانية).</small>
+            </div>
+
+            <div class="actions">
+              <button type="submit" id="teacherSubmitBtn" class="primary">إضافة معلم</button>
+              <button type="button" id="cancelEditTeacherBtn" class="btn secondary hidden">إلغاء التعديل</button>
+              <span id="teacherEditBadge" class="hint hidden">وضع التعديل</span>
+            </div>
+          </form>
+          <div id="teachersList" class="list"></div>
+        </section>
+
+        <!-- تبويب مشاهدة المنجز -->
+        <section class="card tab-section hidden" id="progress-section">
+          <h2>مشاهدة المنجز</h2>
+          <div id="progressSummary" class="progress-summary"></div>
+          <div class="toolbar">
+            <button id="generateBtn" class="primary">توليد الجدول</button>
+            <div class="view-toggle">
+              <button class="btn" data-view="by-class">عرض حسب الصف</button>
+              <button class="btn" data-view="by-teacher">عرض حسب المعلم</button>
+              <button class="btn" data-view="combined-class">عرض مجمع الشُعب</button>
+            </div>
+            <div class="spacer"></div>
+            <div class="export-group">
+              <button id="exportImageBtn" class="btn">تصدير كصورة</button>
+              <button id="exportExcelBtn" class="btn">تصدير Excel</button>
+              <button id="exportWordBtn" class="btn">تصدير Word</button>
+            </div>
+            <button id="printBtn" class="btn">طباعة</button>
+          </div>
+          <div id="printHeader" class="print-header" contenteditable="true" spellcheck="false"></div>
+          <div id="timetableContainer" class="timetable-container"></div>
+        </section>
+      </main>
+    </div>
+
+    <footer class="app-footer">
+      <div>وقت بدء العمل بالجدول: <span id="startedAt">—</span></div>
+    </footer>
+
+    <script src="./js/app.js"></script>
+  </body>
+  </html>
