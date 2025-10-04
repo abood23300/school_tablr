@@ -1392,6 +1392,16 @@ function generateTimetable() {
   const classes = st.classes || [];
   const subjects = st.subjects || [];
   const teachers = st.teachers || [];
+  
+  // حماية: لو كانت هناك دالة مقارنة مع منهاج الوزارة مستخدمة في نسخة أخرى، لا تتسبب في إيقاف التنفيذ إن لم تُحمّل
+  try {
+    if (typeof compareWithMinistryCurriculum === 'function') {
+      // تُستدعى داخل بعض النسخ المنشورة قبل التوليد
+      compareWithMinistryCurriculum();
+    }
+  } catch (e) {
+    console.warn('تخطي مقارنة المنهاج الوزاري لعدم توفر السكربت:', e?.message || e);
+  }
   if (!st.school?.name || workingDays.length === 0 || slotsPerDay <= 0) {
     alert('يرجى إكمال الإعدادات أولاً');
     return [];
@@ -1524,7 +1534,10 @@ function generateTimetable() {
   // 5. زيادة أهمية توزيع الحمل على الأيام من 0.5 إلى 5
   for (const demand of demands) {
     let attempts = 0;
-    while (demand.remaining > 0 && attempts < workingDays.length * slotsPerDay * 2) {
+    // السماح بعدد محاولات أعلى يتناسب مع عدد المعلّمين والطلب المتبقي
+    const baseSweep = workingDays.length * slotsPerDay;
+    const maxAttempts = Math.max(baseSweep * Math.max(1, demand.teachers.length) * 4, demand.remaining * baseSweep * 2);
+    while (demand.remaining > 0 && attempts < maxAttempts) {
       attempts++;
       // build candidate list (day, slot, teacher) with scores
       const candidates = [];
@@ -1535,7 +1548,8 @@ function generateTimetable() {
           for (const tid of demand.teachers) {
             if (!isTeacherAvailable(tid, day, slot)) continue;
             const subjMap = teacherSubjectRemaining.get(tid);
-            const secMap = subjMap?.get(demand.subjectId);
+            if (!subjMap) continue; // teacher has no subjects map (safety)
+            const secMap = subjMap.get(demand.subjectId);
             const left = secMap?.get(demand.sectionId) || 0;
             if (left <= 0) continue;
 
@@ -1572,7 +1586,8 @@ function generateTimetable() {
             // 7. Small jitter to avoid ties
             score += Math.random() * 0.01;
 
-            candidates.push({ day, slot, tid, score });
+            // تضمين معرفات السياق لاستخدامها لاحقًا في حسابات التكرار/التوزيع
+            candidates.push({ day, slot, tid, score, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId });
           }
         }
       }
