@@ -1297,6 +1297,181 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------- Timetable generation ----------
+// دالة المقارنة مع المنهج الوزاري
+function compareWithMinistryCurriculum(st, classes, subjects, teachers) {
+  const warnings = [];
+  const info = [];
+  
+  classes.forEach(cls => {
+    const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
+    
+    sections.forEach(sec => {
+      // حساب الحصص الفعلية المُدخلة لكل مادة في هذه الشعبة
+      const actualPeriods = new Map(); // subjectId -> count
+      
+      subjects.forEach(sub => {
+        const teachersForSubject = teachers.filter(t => 
+          t.classIds.includes(cls.id) && 
+          (t.subjects || []).some(s => s.subjectId === sub.id)
+        );
+        
+        let total = 0;
+        teachersForSubject.forEach(t => {
+          const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
+          if (rec && rec.perSections && typeof rec.perSections[sec.id] === 'number') {
+            total += rec.perSections[sec.id];
+          }
+        });
+        
+        if (total > 0) {
+          actualPeriods.set(sub.id, total);
+        }
+      });
+      
+      // مقارنة مع المنهج الوزاري (إذا كان اسم الصف يطابق)
+      const requiredPeriodsMap = new Map(); // subjectId -> required
+      
+      subjects.forEach(sub => {
+        const ministryPeriods = getMinistryPeriods(sub.name, cls.name);
+        if (ministryPeriods !== null && ministryPeriods > 0) {
+          requiredPeriodsMap.set(sub.id, ministryPeriods);
+        }
+      });
+      
+      // فحص الفروقات
+      requiredPeriodsMap.forEach((required, subjectId) => {
+        const actual = actualPeriods.get(subjectId) || 0;
+        const subject = subjects.find(s => s.id === subjectId);
+        
+        if (actual < required) {
+          warnings.push({
+            section: sec.name,
+            subject: subject.name,
+            required: required,
+            actual: actual,
+            diff: required - actual,
+            type: 'shortage'
+          });
+        } else if (actual > required) {
+          info.push({
+            section: sec.name,
+            subject: subject.name,
+            required: required,
+            actual: actual,
+            diff: actual - required,
+            type: 'excess'
+          });
+        }
+      });
+      
+      // فحص المواد المفقودة (مقررة لكن غير مُدخلة)
+      requiredPeriodsMap.forEach((required, subjectId) => {
+        if (!actualPeriods.has(subjectId)) {
+          const subject = subjects.find(s => s.id === subjectId);
+          warnings.push({
+            section: sec.name,
+            subject: subject.name,
+            required: required,
+            actual: 0,
+            diff: required,
+            type: 'missing'
+          });
+        }
+      });
+    });
+  });
+  
+  return { warnings, info };
+}
+
+// دالة التحقق من عدد الحصص
+function validatePeriodsCount(st, workingDays, slotsPerDay, classes, subjects, teachers) {
+  const totalAvailableSlots = workingDays.length * slotsPerDay;
+  
+  // حساب مجموع الحصص المطلوبة لكل شعبة
+  const sectionDemands = new Map(); // sectionId -> { name, required, available }
+  
+  classes.forEach(cls => {
+    const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
+    sections.forEach(sec => {
+      let totalRequired = 0;
+      
+      // حساب الحصص المطلوبة من المعلمين
+      subjects.forEach(sub => {
+        const capable = teachers.filter(t => t.classIds.includes(cls.id)).filter(t => {
+          const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
+          return rec && rec.perSections && typeof rec.perSections[sec.id] === 'number' && rec.perSections[sec.id] > 0;
+        });
+        
+        const totalPeriods = capable.reduce((acc, t) => {
+          const rec = t.subjects.find(s => s.subjectId === sub.id);
+          return acc + (rec.perSections[sec.id] || 0);
+        }, 0);
+        
+        totalRequired += totalPeriods;
+      });
+      
+      sectionDemands.set(sec.id, {
+        name: sec.name,
+        required: totalRequired,
+        available: totalAvailableSlots
+      });
+    });
+  });
+  
+  // التحقق من وجود فرق بين المطلوب والمتاح
+  let hasIssues = false;
+  let message = '';
+  let excessSections = [];
+  let deficitSections = [];
+  
+  sectionDemands.forEach((demand, secId) => {
+    const diff = demand.required - demand.available;
+    
+    if (diff > 0) {
+      hasIssues = true;
+      excessSections.push({ name: demand.name, diff, required: demand.required });
+    } else if (diff < 0) {
+      deficitSections.push({ name: demand.name, diff: Math.abs(diff), required: demand.required });
+    }
+  });
+  
+  if (hasIssues) {
+    let totalExcess = excessSections.reduce((sum, sec) => sum + sec.diff, 0);
+    message = '⚠️ تنبيه: تم اكتشاف مشكلة في عدد الحصص!\n\n';
+    message += `📊 الحصص المتاحة أسبوعياً: ${totalAvailableSlots} حصة (${workingDays.length} أيام × ${slotsPerDay} حصص)\n\n`;
+    
+    if (excessSections.length > 0) {
+      message += '🔴 الشعب التالية لديها حصص أكثر من المتاح:\n';
+      excessSections.forEach(sec => {
+        message += `   • ${sec.name}: ${sec.diff} حصة زائدة (المطلوب: ${sec.required}، المتاح: ${totalAvailableSlots})\n`;
+      });
+      message += `\n⚠️ المجموع: ${totalExcess} حصة زائدة سيتم إسقاطها تلقائياً!\n\n`;
+    }
+    
+    message += 'هل تريد المتابعة في توليد الجدول؟';
+    
+    return { isValid: false, message };
+  }
+  
+  // إذا كانت هناك حصص فارغة فقط (بدون زيادة)
+  if (deficitSections.length > 0) {
+    let totalDeficit = deficitSections.reduce((sum, sec) => sum + sec.diff, 0);
+    message = `ℹ️ ملاحظة: الحصص المدخلة أقل من المتاح\n\n`;
+    message += `📊 الحصص المتاحة أسبوعياً: ${totalAvailableSlots} حصة (${workingDays.length} أيام × ${slotsPerDay} حصص)\n\n`;
+    message += `سيتم توليد الجدول مع ترك ${totalDeficit} حصة فارغة.\n\n`;
+    message += 'التفاصيل:\n';
+    deficitSections.forEach(sec => {
+      message += `   • ${sec.name}: ${sec.diff} حصة فارغة (المطلوب: ${sec.required}، المتاح: ${totalAvailableSlots})\n`;
+    });
+    message += '\nهل تريد المتابعة؟';
+    
+    return { isValid: false, message };
+  }
+  
+  return { isValid: true, message: '' };
+}
+
 function generateTimetable() {
   const st = loadState();
   const workingDays = (st.school?.workingDays || []).slice();
@@ -1311,6 +1486,46 @@ function generateTimetable() {
   if (classes.length === 0 || subjects.length === 0 || teachers.length === 0) {
     alert('أضف صفوفًا وموادًا ومعلمين قبل توليد الجدول');
     return [];
+  }
+
+  // المقارنة مع المنهج الوزاري
+  const curriculumCheck = compareWithMinistryCurriculum(st, classes, subjects, teachers);
+  if (curriculumCheck.warnings.length > 0 || curriculumCheck.info.length > 0) {
+    let message = '📋 مقارنة مع المنهج الوزاري:\n\n';
+    
+    if (curriculumCheck.warnings.length > 0) {
+      message += '⚠️ تحذيرات (نقص أو مواد مفقودة):\n';
+      curriculumCheck.warnings.forEach(w => {
+        if (w.type === 'missing') {
+          message += `   • ${w.section} - ${w.subject}: مفقودة! (المقرر: ${w.required} حصة)\n`;
+        } else {
+          message += `   • ${w.section} - ${w.subject}: نقص ${w.diff} حصة (المقرر: ${w.required}، المُدخل: ${w.actual})\n`;
+        }
+      });
+      message += '\n';
+    }
+    
+    if (curriculumCheck.info.length > 0) {
+      message += 'ℹ️ معلومات (زيادة عن المقرر):\n';
+      curriculumCheck.info.forEach(i => {
+        message += `   • ${i.section} - ${i.subject}: زيادة ${i.diff} حصة (المقرر: ${i.required}، المُدخل: ${i.actual})\n`;
+      });
+      message += '\n';
+    }
+    
+    message += 'هل تريد المتابعة في توليد الجدول؟';
+    
+    if (!confirm(message)) {
+      return [];
+    }
+  }
+
+  // التحقق من عدد الحصص قبل التوليد
+  const validationResult = validatePeriodsCount(st, workingDays, slotsPerDay, classes, subjects, teachers);
+  if (!validationResult.isValid) {
+    if (!confirm(validationResult.message)) {
+      return [];
+    }
   }
 
   // Build teacher subject capacity map
@@ -1961,3 +2176,72 @@ function renderStats() {
   });
   statsContainer.innerHTML = html;
 }
+
+// ========== Ministry Curriculum Integration ==========
+
+// زر تحميل جميع المواد الوزارية
+document.getElementById('loadMinistrySubjectsBtn')?.addEventListener('click', function() {
+  if (!confirm('هل تريد تحميل جميع المواد المقررة من الوزارة؟\n\nسيتم إضافة جميع المواد الدراسية (15 مادة) إلى قائمة المواد.')) {
+    return;
+  }
+  
+  const ministrySubjects = getAllMinistrySubjects();
+  const st = loadState();
+  let addedCount = 0;
+  
+  ministrySubjects.forEach(subject => {
+    // تحقق إذا كانت المادة موجودة بالفعل
+    const exists = st.subjects.some(s => s.name === subject.name);
+    if (!exists) {
+      st.subjects.push({ id: uid(), name: subject.name });
+      addedCount++;
+    }
+  });
+  
+  if (addedCount > 0) {
+    saveState(st);
+    renderSubjects();
+    alert(`✅ تم إضافة ${addedCount} مادة دراسية بنجاح!`);
+  } else {
+    alert('ℹ️ جميع المواد الوزارية موجودة بالفعل في قائمة المواد.');
+  }
+});
+
+// زر عرض المواد المتاحة
+document.getElementById('showMinistrySubjectsBtn')?.addEventListener('click', function() {
+  const preview = document.getElementById('ministrySubjectsPreview');
+  
+  if (preview.classList.contains('hidden')) {
+    // عرض المواد
+    const ministrySubjects = getAllMinistrySubjects();
+    const st = loadState();
+    
+    let html = '<h4>📚 المواد المتاحة من الوزارة (15 مادة):</h4>';
+    html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;">';
+    
+    ministrySubjects.forEach(subject => {
+      const exists = st.subjects.some(s => s.name === subject.name);
+      const statusIcon = exists ? '✅' : '➕';
+      const statusText = exists ? 'موجودة' : 'غير مضافة';
+      const statusColor = exists ? '#047857' : '#6b7280';
+      
+      html += `
+        <div class="ministry-subject-item">
+          <span class="ministry-subject-name">${subject.name}</span>
+          <span style="font-size: 12px; color: ${statusColor};">${statusIcon} ${statusText}</span>
+        </div>
+      `;
+    });
+    
+    html += '</div>';
+    html += '<p class="hint" style="margin-top: 12px;">💡 اضغط على "تحميل جميع المواد الوزارية" لإضافة المواد الناقصة.</p>';
+    
+    preview.innerHTML = html;
+    preview.classList.remove('hidden');
+    this.textContent = '👁️ إخفاء المواد';
+  } else {
+    // إخفاء المواد
+    preview.classList.add('hidden');
+    this.textContent = '👁️ عرض المواد المتاحة';
+  }
+});
