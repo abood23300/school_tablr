@@ -385,6 +385,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupForms();
   setupProjectsUI();
   renderSubjectsCatalog();
+  renderStats(); // عرض الإحصائيات إذا كان هناك جدول موجود
   // Load print header
   const ph = document.getElementById('printHeader');
   const st2 = loadState();
@@ -1393,6 +1394,12 @@ function generateTimetable() {
   }
 
   // Greedy assignment with scoring and limited backtracking
+  // التحسينات المطبقة:
+  // 1. عقوبة تصاعدية قوية (1000×عدد التكرارات) لتجنب تكرار المادة في نفس اليوم
+  // 2. مكافأة (-50 نقطة) للأيام الخالية من المادة لتشجيع التوزيع
+  // 3. فحص ذكي للبحث عن يوم بديل خالٍ قبل قبول التكرار
+  // 4. زيادة عقوبة الحصص المتتالية من 50 إلى 200
+  // 5. زيادة أهمية توزيع الحمل على الأيام من 0.5 إلى 5
   for (const demand of demands) {
     let attempts = 0;
     while (demand.remaining > 0 && attempts < workingDays.length * slotsPerDay * 2) {
@@ -1412,25 +1419,35 @@ function generateTimetable() {
 
             // scoring
             let score = 0;
-            const tLoad = teacherDayLoad.get(tid)?.get(day) || 0;
-            score += tLoad; // prefer days with less load for that teacher
+            
+            // 1. CRITICAL: Avoid repeating same subject in same day for same class (progressive penalty)
             const subjCount = classDaySubjectCount.get(demand.sectionId)?.get(day)?.get(demand.subjectId) || 0;
-            if (subjCount > 0) score += 100; // strong penalty: avoid repeating same subject in same day for same class
+            if (subjCount > 0) {
+              // عقوبة تصاعدية: كل تكرار يزيد العقوبة أكثر
+              score += 1000 * subjCount; // التكرار الأول: 1000، الثاني: 2000، وهكذا
+            }
 
-            // penalty if adjacent slot already has same subject for this class
+            // 2. HIGH: Penalty if adjacent slot already has same subject for this class
             const prev = assignments.find(a => a.sectionId === demand.sectionId && a.day === day && a.slot === slot-1 && a.subjectId === demand.subjectId);
             const next = assignments.find(a => a.sectionId === demand.sectionId && a.day === day && a.slot === slot+1 && a.subjectId === demand.subjectId);
-            if (prev || next) score += 50;
+            if (prev || next) score += 200; // زيادة العقوبة من 50 إلى 200
 
-            // mild penalty if teacher has adjacent slot busy the same day (to give them breaks if possible)
+            // 3. MEDIUM: Spread class load across days
+            const classDayLoad = (classBusy.get(demand.sectionId)?.get(day)?.size) || 0;
+            score += classDayLoad * 5; // زيادة من 0.5 إلى 5 لتشجيع التوزيع
+
+            // 4. LOW: Balance teacher load across days
+            const tLoad = teacherDayLoad.get(tid)?.get(day) || 0;
+            score += tLoad * 2; // زيادة من 1 إلى 2
+
+            // 5. LOW: Give teacher breaks if possible
             const tBusyDay = teacherBusy.get(tid)?.get(day);
             if (tBusyDay && (tBusyDay.has(slot-1) || tBusyDay.has(slot+1))) score += 10;
 
-            // mild penalty for class day load to spread across days
-            const classDayLoad = (classBusy.get(demand.sectionId)?.get(day)?.size) || 0;
-            score += classDayLoad * 0.5;
+            // 6. Bonus: Prefer days with no occurrence of this subject yet (strong preference)
+            if (subjCount === 0) score -= 50; // مكافأة سالبة (تخفيض النقاط) للأيام الخالية من المادة
 
-            // small jitter to avoid ties
+            // 7. Small jitter to avoid ties
             score += Math.random() * 0.01;
 
             candidates.push({ day, slot, tid, score });
@@ -1442,17 +1459,49 @@ function generateTimetable() {
       candidates.sort((a,b) => a.score - b.score);
       let placed = false;
       if (candidates.length > 0) {
-        const { day, slot, tid } = candidates[0];
-        assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
-        markBusy(classBusy, demand.sectionId, day, slot);
-        markBusy(teacherBusy, tid, day, slot);
-        incTeacherDayLoad(tid, day, 1);
-        incClassDaySubject(demand.sectionId, day, demand.subjectId, 1);
-  const subjMap = teacherSubjectRemaining.get(tid);
-  const secMap = subjMap.get(demand.subjectId);
-  secMap.set(demand.sectionId, (secMap.get(demand.sectionId) || 0) - 1);
-        demand.remaining--;
-        placed = true;
+        // تحسين إضافي: إذا كان أفضل مرشح يكرر المادة في نفس اليوم،
+        // نتحقق إذا كان هناك مرشح بديل في يوم مختلف بفارق نقاط معقول
+        const best = candidates[0];
+        const bestSubjCount = classDaySubjectCount.get(best.sectionId)?.get(best.day)?.get(demand.subjectId) || 0;
+        
+        if (bestSubjCount > 0 && candidates.length > 1) {
+          // ابحث عن أول مرشح في يوم خالٍ من هذه المادة
+          const betterOption = candidates.find((c, idx) => {
+            if (idx === 0) return false; // تجاوز الأفضل الحالي
+            const cSubjCount = classDaySubjectCount.get(c.sectionId)?.get(c.day)?.get(demand.subjectId) || 0;
+            return cSubjCount === 0; // يوم خالٍ من المادة
+          });
+          
+          // إذا وجدنا خيار أفضل (يوم خالٍ)، نستخدمه بدلاً من best
+          if (betterOption) {
+            const { day, slot, tid } = betterOption;
+            assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
+            markBusy(classBusy, demand.sectionId, day, slot);
+            markBusy(teacherBusy, tid, day, slot);
+            incTeacherDayLoad(tid, day, 1);
+            incClassDaySubject(demand.sectionId, day, demand.subjectId, 1);
+            const subjMap = teacherSubjectRemaining.get(tid);
+            const secMap = subjMap.get(demand.subjectId);
+            secMap.set(demand.sectionId, (secMap.get(demand.sectionId) || 0) - 1);
+            demand.remaining--;
+            placed = true;
+          }
+        }
+        
+        // إذا لم نجد خيار أفضل، نستخدم الخيار الأفضل الأصلي
+        if (!placed) {
+          const { day, slot, tid } = best;
+          assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
+          markBusy(classBusy, demand.sectionId, day, slot);
+          markBusy(teacherBusy, tid, day, slot);
+          incTeacherDayLoad(tid, day, 1);
+          incClassDaySubject(demand.sectionId, day, demand.subjectId, 1);
+          const subjMap = teacherSubjectRemaining.get(tid);
+          const secMap = subjMap.get(demand.subjectId);
+          secMap.set(demand.sectionId, (secMap.get(demand.sectionId) || 0) - 1);
+          demand.remaining--;
+          placed = true;
+        }
       }
       // If not placed in a full sweep, try soft backtracking: free one random conflicting slot for this class
       if (!placed) {
@@ -1671,6 +1720,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const assignments = generateTimetable();
     if (assignments.length) {
       renderTimetableByClass(assignments);
+      renderStats(); // إضافة الإحصائيات
     } else {
       container.innerHTML = '';
     }
@@ -1851,4 +1901,63 @@ async function captureElementAsPNG(container) {
   const ctx = canvas.getContext('2d');
   ctx.drawImage(img, 0, 0);
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+}
+
+// ---------- Stats rendering ----------
+function renderStats() {
+  const assignments = getTimetable();
+  const teachers = getTeachers();
+  const st = loadState();
+  const workingDays = st.school?.workingDays || [];
+  const slotsPerDay = st.school?.slotsPerDay || 6;
+  const statsContainer = document.getElementById('statsContainer');
+  if (!assignments.length) {
+    statsContainer.innerHTML = '<p>يرجى توليد الجدول أولاً لعرض الإحصائيات.</p>';
+    return;
+  }
+  // حساب لكل معلم
+  const teacherStats = {};
+  teachers.forEach(t => {
+    teacherStats[t.id] = {
+      name: t.name,
+      totalPeriods: 0,
+      bySlot: Array(slotsPerDay).fill(0),
+      byDay: {},
+      offDays: t.offDays || [],
+      hasLessonsOn: new Set()
+    };
+    workingDays.forEach(d => teacherStats[t.id].byDay[d] = 0);
+  });
+  assignments.forEach(a => {
+    if (teacherStats[a.teacherId]) {
+      teacherStats[a.teacherId].totalPeriods++;
+      teacherStats[a.teacherId].bySlot[a.slot]++;
+      teacherStats[a.teacherId].byDay[a.day]++;
+      teacherStats[a.teacherId].hasLessonsOn.add(a.day);
+    }
+  });
+  // عرض
+  let html = '<h3>إحصائيات المعلمين</h3>';
+  teachers.forEach(t => {
+    const s = teacherStats[t.id];
+    html += `<div class="teacher-stat" style="border:1px solid #e5e7eb; padding:12px; margin-bottom:12px; border-radius:8px;">
+      <h4 style="margin-top:0;">${s.name}</h4>
+      <p><strong>إجمالي الحصص:</strong> ${s.totalPeriods}</p>
+      <p><strong>توزيع الحصص حسب الوقت:</strong></p>
+      <ul>`;
+    s.bySlot.forEach((count, idx) => {
+      if (count > 0) html += `<li>درس ${idx+1}: ${count} حصة</li>`;
+    });
+    html += `</ul>
+      <p><strong>الحصص يوميًا:</strong></p>
+      <ul>`;
+    workingDays.forEach(d => {
+      html += `<li>${d}: ${s.byDay[d]} حصة</li>`;
+    });
+    html += `</ul>
+      <p><strong>أيام الـ OFF:</strong> ${s.offDays.length ? s.offDays.join('، ') : 'لا توجد'}</p>
+      <p><strong>الأيام التي لديه دروس:</strong> ${Array.from(s.hasLessonsOn).join('، ') || 'لا توجد'}</p>
+    </div>`;
+  });
+  statsContainer.innerHTML = html;
 }
