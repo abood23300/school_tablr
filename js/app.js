@@ -1297,93 +1297,6 @@ document.addEventListener('click', (e) => {
 });
 
 // ---------- Timetable generation ----------
-// دالة المقارنة مع المنهج الوزاري
-function compareWithMinistryCurriculum(st, classes, subjects, teachers) {
-  const warnings = [];
-  const info = [];
-  
-  classes.forEach(cls => {
-    const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
-    
-    sections.forEach(sec => {
-      // حساب الحصص الفعلية المُدخلة لكل مادة في هذه الشعبة
-      const actualPeriods = new Map(); // subjectId -> count
-      
-      subjects.forEach(sub => {
-        const teachersForSubject = teachers.filter(t => 
-          t.classIds.includes(cls.id) && 
-          (t.subjects || []).some(s => s.subjectId === sub.id)
-        );
-        
-        let total = 0;
-        teachersForSubject.forEach(t => {
-          const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
-          if (rec && rec.perSections && typeof rec.perSections[sec.id] === 'number') {
-            total += rec.perSections[sec.id];
-          }
-        });
-        
-        if (total > 0) {
-          actualPeriods.set(sub.id, total);
-        }
-      });
-      
-      // مقارنة مع المنهج الوزاري (إذا كان اسم الصف يطابق)
-      const requiredPeriodsMap = new Map(); // subjectId -> required
-      
-      subjects.forEach(sub => {
-        const ministryPeriods = getMinistryPeriods(sub.name, cls.name);
-        if (ministryPeriods !== null && ministryPeriods > 0) {
-          requiredPeriodsMap.set(sub.id, ministryPeriods);
-        }
-      });
-      
-      // فحص الفروقات
-      requiredPeriodsMap.forEach((required, subjectId) => {
-        const actual = actualPeriods.get(subjectId) || 0;
-        const subject = subjects.find(s => s.id === subjectId);
-        
-        if (actual < required) {
-          warnings.push({
-            section: sec.name,
-            subject: subject.name,
-            required: required,
-            actual: actual,
-            diff: required - actual,
-            type: 'shortage'
-          });
-        } else if (actual > required) {
-          info.push({
-            section: sec.name,
-            subject: subject.name,
-            required: required,
-            actual: actual,
-            diff: actual - required,
-            type: 'excess'
-          });
-        }
-      });
-      
-      // فحص المواد المفقودة (مقررة لكن غير مُدخلة)
-      requiredPeriodsMap.forEach((required, subjectId) => {
-        if (!actualPeriods.has(subjectId)) {
-          const subject = subjects.find(s => s.id === subjectId);
-          warnings.push({
-            section: sec.name,
-            subject: subject.name,
-            required: required,
-            actual: 0,
-            diff: required,
-            type: 'missing'
-          });
-        }
-      });
-    });
-  });
-  
-  return { warnings, info };
-}
-
 // دالة التحقق من عدد الحصص
 function validatePeriodsCount(st, workingDays, slotsPerDay, classes, subjects, teachers) {
   const totalAvailableSlots = workingDays.length * slotsPerDay;
@@ -1488,38 +1401,6 @@ function generateTimetable() {
     return [];
   }
 
-  // المقارنة مع المنهج الوزاري
-  const curriculumCheck = compareWithMinistryCurriculum(st, classes, subjects, teachers);
-  if (curriculumCheck.warnings.length > 0 || curriculumCheck.info.length > 0) {
-    let message = '📋 مقارنة مع المنهج الوزاري:\n\n';
-    
-    if (curriculumCheck.warnings.length > 0) {
-      message += '⚠️ تحذيرات (نقص أو مواد مفقودة):\n';
-      curriculumCheck.warnings.forEach(w => {
-        if (w.type === 'missing') {
-          message += `   • ${w.section} - ${w.subject}: مفقودة! (المقرر: ${w.required} حصة)\n`;
-        } else {
-          message += `   • ${w.section} - ${w.subject}: نقص ${w.diff} حصة (المقرر: ${w.required}، المُدخل: ${w.actual})\n`;
-        }
-      });
-      message += '\n';
-    }
-    
-    if (curriculumCheck.info.length > 0) {
-      message += 'ℹ️ معلومات (زيادة عن المقرر):\n';
-      curriculumCheck.info.forEach(i => {
-        message += `   • ${i.section} - ${i.subject}: زيادة ${i.diff} حصة (المقرر: ${i.required}، المُدخل: ${i.actual})\n`;
-      });
-      message += '\n';
-    }
-    
-    message += 'هل تريد المتابعة في توليد الجدول؟';
-    
-    if (!confirm(message)) {
-      return [];
-    }
-  }
-
   // التحقق من عدد الحصص قبل التوليد
   const validationResult = validatePeriodsCount(st, workingDays, slotsPerDay, classes, subjects, teachers);
   if (!validationResult.isValid) {
@@ -1543,6 +1424,20 @@ function generateTimetable() {
 
   // Create demand items per SECTION by subjects derived from teachers who can teach that section
   const demands = [];
+  
+  // Debug logging
+  console.log('=== توليد الجدول - تشخيص ===');
+  console.log('عدد المعلمون:', teachers.length);
+  console.log('عدد الصفوف:', classes.length);
+  console.log('عدد المواد:', subjects.length);
+  
+  // تفصيل كل معلم
+  teachers.forEach(t => {
+    console.log(`المعلم: ${t.name}`);
+    console.log('  - الصفوف المربوطة:', t.classIds);
+    console.log('  - المواد:', t.subjects);
+  });
+  
   classes.forEach(cls => {
     const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
     sections.forEach(sec => {
@@ -1552,6 +1447,15 @@ function generateTimetable() {
           const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
           return rec && rec.perSections && typeof rec.perSections[sec.id] === 'number' && rec.perSections[sec.id] > 0;
         });
+        
+        // Debug logging
+        if (capable.length > 0) {
+          console.log(`الشعبة ${sec.name} - المادة ${sub.name}:`, capable.map(t => ({
+            teacher: t.name,
+            periods: t.subjects.find(s => s.subjectId === sub.id)?.perSections[sec.id]
+          })));
+        }
+        
         const totalPeriods = capable.reduce((acc, t) => {
           const rec = t.subjects.find(s => s.subjectId === sub.id);
           return acc + (rec.perSections[sec.id] || 0);
@@ -1562,6 +1466,9 @@ function generateTimetable() {
       });
     });
   });
+  
+  console.log('الطلبات المُنشأة:', demands);
+  console.log('========================');
 
   // Sort demands by scarcity (fewer teachers first)
   demands.sort((a,b) => a.teachers.length - b.teachers.length || a.remaining - b.remaining);
@@ -2176,72 +2083,3 @@ function renderStats() {
   });
   statsContainer.innerHTML = html;
 }
-
-// ========== Ministry Curriculum Integration ==========
-
-// زر تحميل جميع المواد الوزارية
-document.getElementById('loadMinistrySubjectsBtn')?.addEventListener('click', function() {
-  if (!confirm('هل تريد تحميل جميع المواد المقررة من الوزارة؟\n\nسيتم إضافة جميع المواد الدراسية (15 مادة) إلى قائمة المواد.')) {
-    return;
-  }
-  
-  const ministrySubjects = getAllMinistrySubjects();
-  const st = loadState();
-  let addedCount = 0;
-  
-  ministrySubjects.forEach(subject => {
-    // تحقق إذا كانت المادة موجودة بالفعل
-    const exists = st.subjects.some(s => s.name === subject.name);
-    if (!exists) {
-      st.subjects.push({ id: uid(), name: subject.name });
-      addedCount++;
-    }
-  });
-  
-  if (addedCount > 0) {
-    saveState(st);
-    renderSubjects();
-    alert(`✅ تم إضافة ${addedCount} مادة دراسية بنجاح!`);
-  } else {
-    alert('ℹ️ جميع المواد الوزارية موجودة بالفعل في قائمة المواد.');
-  }
-});
-
-// زر عرض المواد المتاحة
-document.getElementById('showMinistrySubjectsBtn')?.addEventListener('click', function() {
-  const preview = document.getElementById('ministrySubjectsPreview');
-  
-  if (preview.classList.contains('hidden')) {
-    // عرض المواد
-    const ministrySubjects = getAllMinistrySubjects();
-    const st = loadState();
-    
-    let html = '<h4>📚 المواد المتاحة من الوزارة (15 مادة):</h4>';
-    html += '<div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px;">';
-    
-    ministrySubjects.forEach(subject => {
-      const exists = st.subjects.some(s => s.name === subject.name);
-      const statusIcon = exists ? '✅' : '➕';
-      const statusText = exists ? 'موجودة' : 'غير مضافة';
-      const statusColor = exists ? '#047857' : '#6b7280';
-      
-      html += `
-        <div class="ministry-subject-item">
-          <span class="ministry-subject-name">${subject.name}</span>
-          <span style="font-size: 12px; color: ${statusColor};">${statusIcon} ${statusText}</span>
-        </div>
-      `;
-    });
-    
-    html += '</div>';
-    html += '<p class="hint" style="margin-top: 12px;">💡 اضغط على "تحميل جميع المواد الوزارية" لإضافة المواد الناقصة.</p>';
-    
-    preview.innerHTML = html;
-    preview.classList.remove('hidden');
-    this.textContent = '👁️ إخفاء المواد';
-  } else {
-    // إخفاء المواد
-    preview.classList.add('hidden');
-    this.textContent = '👁️ عرض المواد المتاحة';
-  }
-});
