@@ -2052,7 +2052,14 @@ function renderStats() {
     statsContainer.innerHTML = '<p>يرجى توليد الجدول أولاً لعرض الإحصائيات.</p>';
     return;
   }
-  // حساب لكل معلم
+  // خرائط أسماء مساعدة
+  const classSectionName = new Map();
+  (st.classes||[]).forEach(c => {
+    if (c.sections && c.sections.length) c.sections.forEach(sec => classSectionName.set(sec.id, `${c.name} - ${sec.name}`));
+    else classSectionName.set(c.id, c.name);
+  });
+  const subjectName = new Map((st.subjects||[]).map(s => [s.id, s.name]));
+  // حساب فعلي لكل معلم (بعد التوليد)
   const teacherStats = {};
   teachers.forEach(t => {
     teacherStats[t.id] = {
@@ -2073,13 +2080,76 @@ function renderStats() {
       teacherStats[a.teacherId].hasLessonsOn.add(a.day);
     }
   });
+
+  // حساب مخطط مسبقاً من واجهة المعلمين (قبل التوليد)
+  const teacherPlanned = {};
+  teachers.forEach(t => {
+    const plannedBySectionSubject = {};
+    let plannedTotal = 0;
+    (t.subjects||[]).forEach(su => {
+      Object.entries(su.perSections || {}).forEach(([secId, count]) => {
+        if (!plannedBySectionSubject[secId]) plannedBySectionSubject[secId] = {};
+        plannedBySectionSubject[secId][su.subjectId] = (plannedBySectionSubject[secId][su.subjectId] || 0) + (count||0);
+        plannedTotal += (count||0);
+      });
+    });
+    teacherPlanned[t.id] = { name: t.name, plannedTotal, plannedBySectionSubject };
+  });
+
+  // تفصيل فعلي لكل معلم حسب الشعبة/المادة
+  const teacherActualDetail = {};
+  teachers.forEach(t => { teacherActualDetail[t.id] = {}; });
+  assignments.forEach(a => {
+    const bySec = teacherActualDetail[a.teacherId];
+    if (!bySec) return;
+    if (!bySec[a.sectionId]) bySec[a.sectionId] = {};
+    bySec[a.sectionId][a.subjectId] = (bySec[a.sectionId][a.subjectId] || 0) + 1;
+  });
   // عرض
   let html = '<h3>إحصائيات المعلمين</h3>';
+  html += '<p class="hint">مقارنة بين المخطط (ما أُسند للمعلم قبل التوليد) والفعلي (ما خرج بعد التوليد).</p>';
   teachers.forEach(t => {
     const s = teacherStats[t.id];
+    const p = teacherPlanned[t.id];
+    const detailActual = teacherActualDetail[t.id] || {};
     html += `<div class="teacher-stat" style="border:1px solid #e5e7eb; padding:12px; margin-bottom:12px; border-radius:8px;">
       <h4 style="margin-top:0;">${s.name}</h4>
-      <p><strong>إجمالي الحصص:</strong> ${s.totalPeriods}</p>
+      <p><strong>إجمالي الحصص (مخطط):</strong> ${p?.plannedTotal || 0}</p>
+      <p><strong>إجمالي الحصص (فعلي):</strong> ${s.totalPeriods}</p>
+      <div style="display:flex; gap:24px; flex-wrap:wrap;">
+        <div style="flex:1; min-width:260px;">
+          <h5>تفصيل مخطط</h5>
+          ${(() => {
+            const pb = p?.plannedBySectionSubject || {};
+            if (Object.keys(pb).length === 0) return '<p class="hint">لا توجد بيانات مخططة.</p>';
+            let out = '<ul>';
+            Object.entries(pb).forEach(([secId, subjMap]) => {
+              const secName = classSectionName.get(secId) || secId;
+              Object.entries(subjMap).forEach(([subId, cnt]) => {
+                out += `<li>${secName} — ${subjectName.get(subId) || subId}: ${cnt} حصص</li>`;
+              });
+            });
+            out += '</ul>';
+            return out;
+          })()}
+        </div>
+        <div style="flex:1; min-width:260px;">
+          <h5>تفصيل فعلي</h5>
+          ${(() => {
+            const ab = detailActual;
+            if (!ab || Object.keys(ab).length === 0) return '<p class="hint">لا توجد حصص مُسنَدة.</p>';
+            let out = '<ul>';
+            Object.entries(ab).forEach(([secId, subjMap]) => {
+              const secName = classSectionName.get(secId) || secId;
+              Object.entries(subjMap).forEach(([subId, cnt]) => {
+                out += `<li>${secName} — ${subjectName.get(subId) || subId}: ${cnt} حصص</li>`;
+              });
+            });
+            out += '</ul>';
+            return out;
+          })()}
+        </div>
+      </div>
       <p><strong>توزيع الحصص حسب الوقت:</strong></p>
       <ul>`;
     s.bySlot.forEach((count, idx) => {
