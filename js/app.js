@@ -1332,64 +1332,22 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// ===================================================================================
-// ============================ TIMETABLE GENERATION V2 ============================
-// ===================================================================================
-
-// --- Constants for scoring penalties (weights) ---
-const PENALTIES = {
-  // Hard constraints (high penalty to act as near-blocker)
-  SUBJECT_REPEAT_IN_DAY: 1000,
-  ADJACENT_SLOT_SAME_SUBJECT: 200,
-
-  // Soft constraints for balancing (medium penalties)
-  TEACHER_LOAD_IMBALANCE: 50,   // Penalty for deviation from ideal daily load
-  TEACHER_SLOT_CATEGORY_IMBALANCE: 25, // Penalty for uneven distribution between early/mid/late slots
-  TEACHER_DAY_SECTION_SPREAD: 40, // Penalty for teaching too many different sections in one day
-
-  // Minor preferences
-  TEACHER_CONSECUTIVE_SLOTS: 10, // Penalty for back-to-back lessons (prefers breaks)
-  CLASS_LOAD_DISTRIBUTION: 5, // Penalty to spread out a class's lessons over the day
-};
-
-function getSlotCategory(slot, totalSlots) {
-  if (totalSlots <= 3) return 'mid';
-  const third = totalSlots / 3;
-  if (slot < third) return 'early';
-  if (slot < 2 * third) return 'mid';
-  return 'late';
-}
-
-function calculateInitialTeacherLoad(teachers, workingDays) {
-  const idealLoads = new Map();
-  const categoryCounts = new Map();
-  const totalPeriods = new Map();
-
-  teachers.forEach(t => {
-    const periods = (t.subjects || []).reduce((acc, s) => {
-      return acc + Object.values(s.perSections || {}).reduce((sum, count) => sum + count, 0);
-    }, 0);
-    totalPeriods.set(t.id, periods);
-
-    const workingDaysForTeacher = workingDays.filter(day => !(t.offDays || []).includes(day));
-    if (workingDaysForTeacher.length > 0) {
-      idealLoads.set(t.id, periods / workingDaysForTeacher.length);
-    } else {
-      idealLoads.set(t.id, 0);
-    }
-    categoryCounts.set(t.id, { early: 0, mid: 0, late: 0 });
-  });
-
-  return { idealLoads, categoryCounts, totalPeriods };
-}
-
-function buildDemands(classes, subjects, teachers) {
-  const demands = [];
+// ---------- Timetable generation ----------
+// دالة التحقق من عدد الحصص
+function validatePeriodsCount(st, workingDays, slotsPerDay, classes, subjects, teachers) {
+  const totalAvailableSlots = workingDays.length * slotsPerDay;
+  
+  // حساب مجموع الحصص المطلوبة لكل شعبة
+  const sectionDemands = new Map(); // sectionId -> { name, required, available }
+  
   classes.forEach(cls => {
     const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
     sections.forEach(sec => {
+      let totalRequired = 0;
+      
+      // حساب الحصص المطلوبة من المعلمين
       subjects.forEach(sub => {
-        const capable = teachers.filter(t => {
+        const capable = teachers.filter(t => t.classIds.includes(cls.id)).filter(t => {
           const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
           return rec && rec.perSections && typeof rec.perSections[sec.id] === 'number' && rec.perSections[sec.id] > 0;
         });
@@ -1398,299 +1356,534 @@ function buildDemands(classes, subjects, teachers) {
           const rec = t.subjects.find(s => s.subjectId === sub.id);
           return acc + (rec.perSections[sec.id] || 0);
         }, 0);
+        
+        totalRequired += totalPeriods;
+      });
+      
+      sectionDemands.set(sec.id, {
+        name: sec.name,
+        required: totalRequired,
+        available: totalAvailableSlots
+      });
+    });
+  });
+  
+  // التحقق من وجود فرق بين المطلوب والمتاح
+  let hasIssues = false;
+  let message = '';
+  let excessSections = [];
+  let deficitSections = [];
+  
+  sectionDemands.forEach((demand, secId) => {
+    const diff = demand.required - demand.available;
+    
+    if (diff > 0) {
+      hasIssues = true;
+      excessSections.push({ name: demand.name, diff, required: demand.required });
+    } else if (diff < 0) {
+      deficitSections.push({ name: demand.name, diff: Math.abs(diff), required: demand.required });
+    }
+  });
+  
+  if (hasIssues) {
+    let totalExcess = excessSections.reduce((sum, sec) => sum + sec.diff, 0);
+    message = '⚠️ تنبيه: تم اكتشاف مشكلة في عدد الحصص!\n\n';
+    message += `📊 الحصص المتاحة أسبوعياً: ${totalAvailableSlots} حصة (${workingDays.length} أيام × ${slotsPerDay} حصص)\n\n`;
+    
+    if (excessSections.length > 0) {
+      message += '🔴 الشعب التالية لديها حصص أكثر من المتاح:\n';
+      excessSections.forEach(sec => {
+        message += `   • ${sec.name}: ${sec.diff} حصة زائدة (المطلوب: ${sec.required}، المتاح: ${totalAvailableSlots})\n`;
+      });
+      message += `\n⚠️ المجموع: ${totalExcess} حصة زائدة سيتم إسقاطها تلقائياً!\n\n`;
+    }
+    
+    message += 'هل تريد المتابعة في توليد الجدول؟';
+    
+    return { isValid: false, message };
+  }
+  
+  // إذا كانت هناك حصص فارغة فقط (بدون زيادة)
+  if (deficitSections.length > 0) {
+    let totalDeficit = deficitSections.reduce((sum, sec) => sum + sec.diff, 0);
+    message = `ℹ️ ملاحظة: الحصص المدخلة أقل من المتاح\n\n`;
+    message += `📊 الحصص المتاحة أسبوعياً: ${totalAvailableSlots} حصة (${workingDays.length} أيام × ${slotsPerDay} حصص)\n\n`;
+    message += `سيتم توليد الجدول مع ترك ${totalDeficit} حصة فارغة.\n\n`;
+    message += 'التفاصيل:\n';
+    deficitSections.forEach(sec => {
+      message += `   • ${sec.name}: ${sec.diff} حصة فارغة (المطلوب: ${sec.required}، المتاح: ${totalAvailableSlots})\n`;
+    });
+    message += '\nهل تريد المتابعة؟';
+    
+    return { isValid: false, message };
+  }
+  
+  return { isValid: true, message: '' };
+}
 
+function generateTimetable() {
+  const st = loadState();
+  const workingDays = (st.school?.workingDays || []).slice();
+  const slotsPerDay = st.school?.slotsPerDay || 6;
+  const classes = st.classes || [];
+  const subjects = st.subjects || [];
+  const teachers = st.teachers || [];
+  const slotCategories = Array.from({ length: slotsPerDay }, (_, slot) => {
+    if (slotsPerDay <= 0) return `slot-${slot}`;
+    if (slotsPerDay <= 3) return `slot-${slot}`;
+    const segment = slotsPerDay / 3;
+    if (slot < Math.ceil(segment)) return 'early';
+    if (slot < Math.ceil(segment * 2)) return 'mid';
+    return 'late';
+  });
+  const categorySlotCounts = new Map();
+  slotCategories.forEach(cat => {
+    categorySlotCounts.set(cat, (categorySlotCounts.get(cat) || 0) + 1);
+  });
+  const uniqueSlotCategories = Array.from(new Set(slotCategories));
+  
+  // حماية: لو كانت هناك دالة مقارنة مع منهاج الوزارة مستخدمة في نسخة أخرى، لا تتسبب في إيقاف التنفيذ إن لم تُحمّل
+  try {
+    if (typeof compareWithMinistryCurriculum === 'function') {
+      // تُستدعى داخل بعض النسخ المنشورة قبل التوليد
+      compareWithMinistryCurriculum();
+    }
+  } catch (e) {
+    console.warn('تخطي مقارنة المنهاج الوزاري لعدم توفر السكربت:', e?.message || e);
+  }
+  if (!st.school?.name || workingDays.length === 0 || slotsPerDay <= 0) {
+    alert('يرجى إكمال الإعدادات أولاً');
+    return [];
+  }
+  if (classes.length === 0 || subjects.length === 0 || teachers.length === 0) {
+    alert('أضف صفوفًا وموادًا ومعلمين قبل توليد الجدول');
+    return [];
+  }
+
+  // التحقق من عدد الحصص قبل التوليد
+  const validationResult = validatePeriodsCount(st, workingDays, slotsPerDay, classes, subjects, teachers);
+  if (!validationResult.isValid) {
+    if (!confirm(validationResult.message)) {
+      return [];
+    }
+  }
+
+  // Build teacher subject capacity map
+  const teacherMap = new Map(teachers.map(t => [t.id, t]));
+  // Track per-teacher per-subject per-section remaining
+  const teacherSubjectRemaining = new Map(); // teacherId -> Map(subjectId->Map(sectionId->remaining))
+  const teacherTotalLoad = new Map();
+  const teacherIdealDailyLoad = new Map();
+  const teacherIdealCategoryLoad = new Map();
+  teachers.forEach(t => {
+    const subjMap = new Map();
+    let totalLoad = 0;
+    (t.subjects||[]).forEach(s => {
+      const secMap = new Map();
+      Object.entries(s.perSections || {}).forEach(([secId, rawValue]) => {
+        const count = Math.max(0, rawValue || 0);
+        secMap.set(secId, count);
+        totalLoad += count;
+      });
+      if (secMap.size > 0) {
+        subjMap.set(s.subjectId, secMap);
+      }
+    });
+    teacherSubjectRemaining.set(t.id, subjMap);
+    teacherTotalLoad.set(t.id, totalLoad);
+    const idealDaily = workingDays.length ? (totalLoad / workingDays.length) : totalLoad;
+    teacherIdealDailyLoad.set(t.id, idealDaily);
+    const catIdealMap = new Map();
+    uniqueSlotCategories.forEach(cat => {
+      const ratio = (categorySlotCounts.get(cat) || 0) / Math.max(1, slotsPerDay);
+      catIdealMap.set(cat, totalLoad * ratio);
+    });
+    teacherIdealCategoryLoad.set(t.id, catIdealMap);
+  });
+
+  // Create demand items per SECTION by subjects derived from teachers who can teach that section
+  const demands = [];
+  
+  // Debug logging
+  console.log('=== توليد الجدول - تشخيص ===');
+  console.log('عدد المعلمون:', teachers.length);
+  console.log('عدد الصفوف:', classes.length);
+  console.log('عدد المواد:', subjects.length);
+  
+  // تفصيل كل معلم
+  teachers.forEach(t => {
+    console.log(`المعلم: ${t.name}`);
+    console.log('  - الصفوف المربوطة:', t.classIds);
+    console.log('  - المواد:', t.subjects);
+  });
+  
+  classes.forEach(cls => {
+    const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
+    sections.forEach(sec => {
+      subjects.forEach(sub => {
+        // teachers who have perSections allocation for this section and subject
+        // Note: rely on perSections itself; do NOT require classIds linkage to avoid accidental exclusion
+        const capable = teachers.filter(t => {
+          const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
+          return rec && rec.perSections && typeof rec.perSections[sec.id] === 'number' && rec.perSections[sec.id] > 0;
+        });
+        
+        // Debug logging
+        if (capable.length > 0) {
+          console.log(`الشعبة ${sec.name} - المادة ${sub.name}:`, capable.map(t => ({
+            teacher: t.name,
+            periods: t.subjects.find(s => s.subjectId === sub.id)?.perSections[sec.id]
+          })));
+        }
+        
+        const totalPeriods = capable.reduce((acc, t) => {
+          const rec = t.subjects.find(s => s.subjectId === sub.id);
+          return acc + (rec.perSections[sec.id] || 0);
+        }, 0);
         if (totalPeriods > 0) {
-          demands.push({ 
-            sectionId: sec.id, 
-            classId: cls.id, 
-            subjectId: sub.id, 
-            remaining: totalPeriods, 
-            teachers: capable.map(t => t.id) 
-          });
+          demands.push({ sectionId: sec.id, classId: cls.id, subjectId: sub.id, remaining: totalPeriods, teachers: capable.map(t => t.id) });
         }
       });
     });
   });
-  // Sort demands: fewer available teachers first, then higher remaining periods
-  demands.sort((a, b) => a.teachers.length - b.teachers.length || b.remaining - a.remaining);
-  return demands;
-}
+  
+  console.log('الطلبات المُنشأة:', demands);
+  console.log('========================');
 
-function scoreCandidate(candidate, context) {
-  const { day, slot, tid, sectionId, subjectId } = candidate;
-  const { 
-    slotsPerDay,
-    classDaySubjectCount,
-    teacherDayLoad,
-    teacherDaySectionCount,
-    teacherCategoryCounts,
-    teacherIdealLoads,
-    teacherTotalPeriods,
-    assignments
-  } = context;
+  // Sort demands by scarcity (fewer teachers first)
+  demands.sort((a,b) => a.teachers.length - b.teachers.length || a.remaining - b.remaining);
 
-  let score = 0;
-
-  // 1. CRITICAL: Avoid repeating same subject in same day for same class
-  const subjCountToday = classDaySubjectCount.get(sectionId)?.get(day)?.get(subjectId) || 0;
-  if (subjCountToday > 0) {
-    score += PENALTIES.SUBJECT_REPEAT_IN_DAY * Math.pow(subjCountToday, 2);
-  }
-
-  // 2. HIGH: Penalty if adjacent slot already has same subject for this class
-  const prev = assignments.find(a => a.sectionId === sectionId && a.day === day && a.slot === slot - 1 && a.subjectId === subjectId);
-  const next = assignments.find(a => a.sectionId === sectionId && a.day === day && a.slot === slot + 1 && a.subjectId === subjectId);
-  if (prev || next) {
-    score += PENALTIES.ADJACENT_SLOT_SAME_SUBJECT;
-  }
-
-  // 3. BALANCE: Teacher daily load balancing
-  const idealLoad = teacherIdealLoads.get(tid) || 0;
-  const currentLoad = teacherDayLoad.get(tid)?.get(day) || 0;
-  // Calculate penalty based on how much adding this lesson deviates from the ideal
-  const deviation = Math.abs((currentLoad + 1) - idealLoad);
-  score += PENALTIES.TEACHER_LOAD_IMBALANCE * Math.pow(deviation, 2);
-
-  // 4. BALANCE: Teacher slot category balancing (early/mid/late)
-  const category = getSlotCategory(slot, slotsPerDay);
-  const categoryCounts = teacherCategoryCounts.get(tid);
-  const totalPeriods = teacherTotalPeriods.get(tid) || 1;
-  const idealCategoryCount = totalPeriods / 3;
-  const currentCategoryCount = categoryCounts[category];
-  const categoryDeviation = Math.abs((currentCategoryCount + 1) - idealCategoryCount);
-  score += PENALTIES.TEACHER_SLOT_CATEGORY_IMBALANCE * categoryDeviation;
-
-  // 5. BALANCE: Teacher section spread per day (prefer not to teach too many different sections in one day)
-  const sectionsToday = teacherDaySectionCount.get(tid)?.get(day) || new Set();
-  if (!sectionsToday.has(sectionId)) {
-      // This is a new section for the teacher today, add penalty based on how many they already have
-      score += PENALTIES.TEACHER_DAY_SECTION_SPREAD * sectionsToday.size;
-  }
-
-  // 6. PREFERENCE: Give teacher breaks if possible
-  const tBusyDay = context.teacherBusy.get(tid)?.get(day);
-  if (tBusyDay && (tBusyDay.has(slot - 1) || tBusyDay.has(slot + 1))) {
-    score += PENALTIES.TEACHER_CONSECUTIVE_SLOTS;
-  }
-
-  // 7. PREFERENCE: Spread class load across the day
-  const classDayLoad = (context.classBusy.get(sectionId)?.get(day)?.size) || 0;
-  score += PENALTIES.CLASS_LOAD_DISTRIBUTION * classDayLoad;
-
-  // 8. Small jitter to avoid ties
-  score += Math.random() * 0.1;
-
-  return score;
-}
-
-function placeCandidate(candidate, context) {
-    const { day, slot, tid, sectionId, classId, subjectId } = candidate;
-    const {
-        assignments,
-        classBusy,
-        teacherBusy,
-        teacherDayLoad,
-        classDaySubjectCount,
-        teacherSubjectRemaining,
-        teacherCategoryCounts,
-        teacherDaySectionCount,
-        slotsPerDay
-    } = context;
-
-    // Add to assignments
-    assignments.push(candidate);
-
-    // Mark as busy
-    if (!classBusy.has(sectionId)) classBusy.set(sectionId, new Map());
-    const dayMap = classBusy.get(sectionId);
-    if (!dayMap.has(day)) dayMap.set(day, new Set());
-    dayMap.get(day).add(slot);
-
-    if (!teacherBusy.has(tid)) teacherBusy.set(tid, new Map());
-    const tDayMap = teacherBusy.get(tid);
-    if (!tDayMap.has(day)) tDayMap.set(day, new Set());
-    tDayMap.get(day).add(slot);
-
-    // Update load and counts
-    if (!teacherDayLoad.has(tid)) teacherDayLoad.set(tid, new Map());
-    teacherDayLoad.get(tid).set(day, (teacherDayLoad.get(tid).get(day) || 0) + 1);
-
-    if (!classDaySubjectCount.has(sectionId)) classDaySubjectCount.set(sectionId, new Map());
-    if (!classDaySubjectCount.get(sectionId).has(day)) classDaySubjectCount.get(sectionId).set(day, new Map());
-    const daySubjectMap = classDaySubjectCount.get(sectionId).get(day);
-    daySubjectMap.set(subjectId, (daySubjectMap.get(subjectId) || 0) + 1);
-
-    const category = getSlotCategory(slot, slotsPerDay);
-    teacherCategoryCounts.get(tid)[category]++;
-
-    if (!teacherDaySectionCount.has(tid)) teacherDaySectionCount.set(tid, new Map());
-    if (!teacherDaySectionCount.get(tid).has(day)) teacherDaySectionCount.get(tid).set(day, new Set());
-    teacherDaySectionCount.get(tid).get(day).add(sectionId);
-
-    // Decrement remaining for the teacher
-    const subjMap = teacherSubjectRemaining.get(tid);
-    const secMap = subjMap?.get(subjectId);
-    if (secMap) {
-        secMap.set(sectionId, (secMap.get(sectionId) || 1) - 1);
-    }
-}
-
-
-function generateTimetable() {
-  const st = loadState();
-  const { workingDays = [], slotsPerDay = 6 } = st.school || {};
-  const { classes = [], subjects = [], teachers = [] } = st;
-
-  if (!st.school?.name || workingDays.length === 0 || slotsPerDay <= 0 || classes.length === 0 || subjects.length === 0 || teachers.length === 0) {
-    alert('يرجى إكمال الإعدادات وإضافة الصفوف والمواد والمعلمين أولاً.');
-    return [];
-  }
-
-  const validationResult = validatePeriodsCount(st, workingDays, slotsPerDay, classes, subjects, teachers);
-  if (!validationResult.isValid && !confirm(validationResult.message)) {
-    return [];
-  }
-
-  // --- Initialization ---
-  const demands = buildDemands(classes, subjects, teachers);
-  const { idealLoads, categoryCounts, totalPeriods } = calculateInitialTeacherLoad(teachers, workingDays);
-
-  const teacherMap = new Map(teachers.map(t => [t.id, t]));
-  const teacherSubjectRemaining = new Map();
-  teachers.forEach(t => {
-    const subjMap = new Map();
-    (t.subjects || []).forEach(s => {
-      subjMap.set(s.subjectId, new Map(Object.entries(s.perSections || {})));
-    });
-    teacherSubjectRemaining.set(t.id, subjMap);
-  });
-
-  // --- Main data structures for tracking state ---
+  // Timetable structure and load maps
   const assignments = [];
   const classBusy = new Map(); // sectionId -> Map(day->Set(slot))
   const teacherBusy = new Map(); // teacherId -> Map(day->Set(slot))
   const teacherDayLoad = new Map(); // teacherId -> Map(day->count)
   const classDaySubjectCount = new Map(); // sectionId -> Map(day -> Map(subjectId->count))
-  const teacherDaySectionCount = new Map(); // teacherId -> Map(day -> Set(sectionId))
+  const teacherDaySectionCount = new Map(); // teacherId -> Map(day -> Map(sectionId->count))
+  const teacherCategoryLoad = new Map(); // teacherId -> Map(category -> count)
 
-  const context = {
-    slotsPerDay,
-    workingDays,
-    assignments,
-    classBusy,
-    teacherBusy,
-    teacherDayLoad,
-    classDaySubjectCount,
-    teacherDaySectionCount,
-    teacherCategoryCounts: categoryCounts,
-    teacherIdealLoads: idealLoads,
-    teacherTotalPeriods: totalPeriods,
-    teacherSubjectRemaining,
-    teacherMap
-  };
+  function isTeacherAvailable(tid, day, slot) {
+    const t = teacherMap.get(tid);
+    if (!t) return false;
+    if ((t.offDays || []).includes(day)) return false;
+    if ((t.forbiddenSlots || []).includes(slot)) return false;
+    // Check per-day/slot forbiddance
+    if (Array.isArray(t.forbiddenDaySlots) && t.forbiddenDaySlots.length) {
+      const rule = t.forbiddenDaySlots.find(r => r.day === day);
+      if (rule && Array.isArray(rule.slots) && rule.slots.includes(slot)) return false;
+    }
+    const busyDay = teacherBusy.get(tid)?.get(day);
+    if (busyDay && busyDay.has(slot)) return false;
+    return true;
+  }
+  function markBusy(map, id, day, slot) {
+    if (!map.has(id)) map.set(id, new Map());
+    const dayMap = map.get(id);
+    if (!dayMap.has(day)) dayMap.set(day, new Set());
+    dayMap.get(day).add(slot);
+  }
 
-  // --- Main Assignment Loop ---
+  function incTeacherDayLoad(tid, day, delta) {
+    if (!teacherDayLoad.has(tid)) teacherDayLoad.set(tid, new Map());
+    const m = teacherDayLoad.get(tid);
+    m.set(day, (m.get(day) || 0) + delta);
+  }
+
+  function incClassDaySubject(clsId, day, subjectId, delta) {
+    if (!classDaySubjectCount.has(clsId)) classDaySubjectCount.set(clsId, new Map());
+    const m = classDaySubjectCount.get(clsId);
+    if (!m.has(day)) m.set(day, new Map());
+    const sm = m.get(day);
+    sm.set(subjectId, (sm.get(subjectId) || 0) + delta);
+  }
+
+  function getSlotCategory(slot) {
+    return slotCategories[slot] || `slot-${slot}`;
+  }
+
+  function adjustTeacherDaySectionCount(tid, day, sectionId, delta) {
+    if (!teacherDaySectionCount.has(tid)) teacherDaySectionCount.set(tid, new Map());
+    const dayMap = teacherDaySectionCount.get(tid);
+    if (!dayMap.has(day)) dayMap.set(day, new Map());
+    const secMap = dayMap.get(day);
+    const next = (secMap.get(sectionId) || 0) + delta;
+    if (next <= 0) {
+      secMap.delete(sectionId);
+      if (secMap.size === 0) dayMap.delete(day);
+      if (dayMap.size === 0) teacherDaySectionCount.delete(tid);
+    } else {
+      secMap.set(sectionId, next);
+    }
+  }
+
+  function adjustTeacherCategoryLoad(tid, category, delta) {
+    if (!teacherCategoryLoad.has(tid)) teacherCategoryLoad.set(tid, new Map());
+    const catMap = teacherCategoryLoad.get(tid);
+    const next = (catMap.get(category) || 0) + delta;
+    if (next <= 0) {
+      catMap.delete(category);
+      if (catMap.size === 0) teacherCategoryLoad.delete(tid);
+    } else {
+      catMap.set(category, next);
+    }
+  }
+
+  function recordAssignment(day, slot, demand, tid) {
+    assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
+    markBusy(classBusy, demand.sectionId, day, slot);
+    markBusy(teacherBusy, tid, day, slot);
+    incTeacherDayLoad(tid, day, 1);
+    incClassDaySubject(demand.sectionId, day, demand.subjectId, 1);
+    adjustTeacherDaySectionCount(tid, day, demand.sectionId, 1);
+    adjustTeacherCategoryLoad(tid, getSlotCategory(slot), 1);
+    const subjMap = teacherSubjectRemaining.get(tid);
+    const secMap = subjMap?.get(demand.subjectId);
+    if (secMap) {
+      const current = secMap.get(demand.sectionId) || 0;
+      secMap.set(demand.sectionId, current > 0 ? current - 1 : 0);
+    }
+    demand.remaining--;
+  }
+
+  function releaseAssignment(assignment) {
+    const { day, slot, sectionId, subjectId, teacherId } = assignment;
+    const classDayMap = classBusy.get(sectionId)?.get(day);
+    classDayMap?.delete(slot);
+    if (classDayMap && classDayMap.size === 0) {
+      classBusy.get(sectionId)?.delete(day);
+      if ((classBusy.get(sectionId)?.size || 0) === 0) classBusy.delete(sectionId);
+    }
+    const teacherDayMap = teacherBusy.get(teacherId)?.get(day);
+    teacherDayMap?.delete(slot);
+    if (teacherDayMap && teacherDayMap.size === 0) {
+      teacherBusy.get(teacherId)?.delete(day);
+      if ((teacherBusy.get(teacherId)?.size || 0) === 0) teacherBusy.delete(teacherId);
+    }
+    incTeacherDayLoad(teacherId, day, -1);
+    incClassDaySubject(sectionId, day, subjectId, -1);
+    adjustTeacherDaySectionCount(teacherId, day, sectionId, -1);
+    adjustTeacherCategoryLoad(teacherId, getSlotCategory(slot), -1);
+    const subjMap = teacherSubjectRemaining.get(teacherId);
+    const secMap = subjMap?.get(subjectId);
+    if (secMap) {
+      secMap.set(sectionId, (secMap.get(sectionId) || 0) + 1);
+    }
+  }
+
+  // Greedy assignment with scoring and limited backtracking
+  // التحسينات المطبقة:
+  // 1. عقوبة تصاعدية قوية لتكرار المادة في نفس اليوم للشعبة.
+  // 2. تجنب الحصص المتجاورة لنفس المادة في اليوم نفسه.
+  // 3. موازنة عدد حصص المعلم بين الأيام وفق الحمل المثالي.
+  // 4. موازنة الشعب التي يدرسها المعلم في اليوم الواحد.
+  // 5. توزيع حصص المعلم بين فترات اليوم (أولى/وسطى/أخيرة).
+  // 6. الحفاظ على استراحات المعلم بقدر الإمكان.
+  // 7. مكافأة اختيار الأيام الخالية من المادة وتشويش بسيط لمنع التعادل.
   for (const demand of demands) {
-    const maxAttempts = workingDays.length * slotsPerDay * Math.max(5, demand.teachers.length) * 2;
     let attempts = 0;
-
+    // السماح بعدد محاولات أعلى يتناسب مع عدد المعلّمين والطلب المتبقي
+    const baseSweep = workingDays.length * slotsPerDay;
+    const maxAttempts = Math.max(baseSweep * Math.max(1, demand.teachers.length) * 4, demand.remaining * baseSweep * 2);
     while (demand.remaining > 0 && attempts < maxAttempts) {
       attempts++;
+      // build candidate list (day, slot, teacher) with scores
       const candidates = [];
-      
       for (const day of workingDays) {
         for (let slot = 0; slot < slotsPerDay; slot++) {
-          if (classBusy.get(demand.sectionId)?.get(day)?.has(slot)) continue;
-
+          const cBusyDay = classBusy.get(demand.sectionId)?.get(day);
+          if (cBusyDay && cBusyDay.has(slot)) continue;
           for (const tid of demand.teachers) {
-            if (!isTeacherAvailable(tid, day, slot, teacherMap, teacherBusy)) continue;
-            
+            if (!isTeacherAvailable(tid, day, slot)) continue;
             const subjMap = teacherSubjectRemaining.get(tid);
-            const secMap = subjMap?.get(demand.subjectId);
-            if (!secMap || (secMap.get(demand.sectionId) || 0) <= 0) continue;
+            if (!subjMap) continue; // teacher has no subjects map (safety)
+            const secMap = subjMap.get(demand.subjectId);
+            const left = secMap?.get(demand.sectionId) || 0;
+            if (left <= 0) continue;
 
-            const candidate = { day, slot, tid, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId };
-            candidate.score = scoreCandidate(candidate, context);
-            candidates.push(candidate);
+            // scoring
+            let score = 0;
+            const category = getSlotCategory(slot);
+            
+            // 1. CRITICAL: Avoid repeating same subject in same day for same class (progressive penalty)
+            const subjCount = classDaySubjectCount.get(demand.sectionId)?.get(day)?.get(demand.subjectId) || 0;
+            if (subjCount > 0) {
+              score += 1000 * subjCount;
+            }
+
+            // 2. HIGH: Penalty if adjacent slot already has same subject for this class
+            const prev = assignments.find(a => a.sectionId === demand.sectionId && a.day === day && a.slot === slot-1 && a.subjectId === demand.subjectId);
+            const next = assignments.find(a => a.sectionId === demand.sectionId && a.day === day && a.slot === slot+1 && a.subjectId === demand.subjectId);
+            if (prev || next) score += 200;
+
+            // 3. MEDIUM: Spread class load across days
+            const classDayLoad = (classBusy.get(demand.sectionId)?.get(day)?.size) || 0;
+            score += classDayLoad * 5;
+
+            // 4. Balance teacher load across days (close to ideal)
+            const tLoad = teacherDayLoad.get(tid)?.get(day) || 0;
+            const idealDaily = teacherIdealDailyLoad.get(tid) || 0;
+            const projectedLoad = tLoad + 1;
+            const projectedDiff = Math.abs(projectedLoad - idealDaily);
+            score += projectedDiff * 90;
+            if (tLoad < idealDaily) {
+              score -= Math.min(idealDaily - tLoad, 1) * 35;
+            }
+
+            // 5. Diversify sections taught by the teacher in the same day
+            const sectionRepeatCount = teacherDaySectionCount.get(tid)?.get(day)?.get(demand.sectionId) || 0;
+            if (sectionRepeatCount > 0) {
+              score += 250 * (sectionRepeatCount + 1);
+            } else {
+              score -= 10;
+            }
+
+            // 6. Balance slot categories (early / mid / late)
+            const catMap = teacherCategoryLoad.get(tid);
+            const catCount = catMap?.get(category) || 0;
+            const idealCat = teacherIdealCategoryLoad.get(tid)?.get(category) ?? ((teacherTotalLoad.get(tid) || 0) / Math.max(1, uniqueSlotCategories.length));
+            const projectedCat = catCount + 1;
+            const catDiff = Math.abs(projectedCat - idealCat);
+            score += catDiff * 60;
+            if (catCount < idealCat) {
+              score -= Math.min(idealCat - catCount, 1) * 15;
+            }
+
+            // 7. Give teacher breaks if possible
+            const tBusyDay = teacherBusy.get(tid)?.get(day);
+            if (tBusyDay && (tBusyDay.has(slot-1) || tBusyDay.has(slot+1))) score += 10;
+
+            // 8. Bonus: Prefer days with no occurrence of this subject yet (strong preference)
+            if (subjCount === 0) score -= 50;
+
+            // 9. Small jitter to avoid ties
+            score += Math.random() * 0.01;
+
+            // تضمين معرفات السياق لاستخدامها لاحقًا في حسابات التكرار/التوزيع
+            candidates.push({ day, slot, tid, score, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId });
           }
         }
       }
 
+      // pick best candidate
+      candidates.sort((a,b) => a.score - b.score);
+      let placed = false;
       if (candidates.length > 0) {
-        candidates.sort((a, b) => a.score - b.score);
+        // تحسين إضافي: إذا كان أفضل مرشح يكرر المادة في نفس اليوم،
+        // نتحقق إذا كان هناك مرشح بديل في يوم مختلف بفارق نقاط معقول
         const best = candidates[0];
-        placeCandidate(best, context);
-        demand.remaining--;
-      } else {
-        // No candidates found, break to avoid infinite loop for this demand
-        break;
+        const bestSubjCount = classDaySubjectCount.get(best.sectionId)?.get(best.day)?.get(demand.subjectId) || 0;
+        
+        if (bestSubjCount > 0 && candidates.length > 1) {
+          // ابحث عن أول مرشح في يوم خالٍ من هذه المادة
+          const betterOption = candidates.find((c, idx) => {
+            if (idx === 0) return false; // تجاوز الأفضل الحالي
+            const cSubjCount = classDaySubjectCount.get(c.sectionId)?.get(c.day)?.get(demand.subjectId) || 0;
+            return cSubjCount === 0; // يوم خالٍ من المادة
+          });
+          
+          // إذا وجدنا خيار أفضل (يوم خالٍ)، نستخدمه بدلاً من best
+          if (betterOption) {
+            const { day, slot, tid } = betterOption;
+            recordAssignment(day, slot, demand, tid);
+            placed = true;
+          }
+        }
+        
+        // إذا لم نجد خيار أفضل، نستخدم الخيار الأفضل الأصلي
+        if (!placed) {
+          const { day, slot, tid } = best;
+          recordAssignment(day, slot, demand, tid);
+          placed = true;
+        }
+      }
+      // If not placed in a full sweep, try soft backtracking: free one random conflicting slot for this class
+      if (!placed) {
+        const idx = assignments.findIndex(a => a.sectionId === demand.sectionId);
+        if (idx >= 0) {
+          const a = assignments.splice(idx, 1)[0];
+          releaseAssignment(a);
+          // return that demand
+          const back = demands.find(d => d.sectionId === a.sectionId && d.subjectId === a.subjectId);
+          if (back) back.remaining++;
+        } else {
+          break; // nothing to backtrack
+        }
       }
     }
   }
 
-  // --- Fallback Pass for any remaining demands ---
+  // Fallback pass: try to place any remaining demand in any free slot with any available teacher
   const leftovers = demands.filter(d => d.remaining > 0);
   if (leftovers.length > 0) {
-    console.log("=== Fallback Pass Started ===");
+    console.log('=== مرحلة التعويض - الطلبات المتبقية ===');
+    leftovers.forEach(d => console.log(`شعبة ${d.sectionId} مادة ${d.subjectId}: ${d.remaining} حصة متبقية`));
+    
+    // Count free slots per section
+    const freeSlotsPerSection = new Map();
+    workingDays.forEach(day => {
+      for (let slot = 0; slot < slotsPerDay; slot++) {
+        classes.forEach(cls => {
+          const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id }];
+          sections.forEach(sec => {
+            const busy = classBusy.get(sec.id)?.get(day)?.has(slot);
+            if (!busy) {
+              freeSlotsPerSection.set(sec.id, (freeSlotsPerSection.get(sec.id) || 0) + 1);
+            }
+          });
+        });
+      }
+    });
+    console.log('الخانات المتاحة لكل شعبة:');
+    freeSlotsPerSection.forEach((count, secId) => console.log(`شعبة ${secId}: ${count} خانة متاحة`));
+    
+    // Sort leftovers by remaining descending to prioritize high-demand
+    leftovers.sort((a,b) => b.remaining - a.remaining);
+    
     for (const demand of leftovers) {
-        let placedInFallback = true;
-        while(demand.remaining > 0 && placedInFallback) {
-            placedInFallback = false;
-            let bestFallbackCandidate = null;
+      outer_leftover: while (demand.remaining > 0) {
+        let placed = false;
+        for (const day of workingDays) {
+          const cBusyDay = classBusy.get(demand.sectionId)?.get(day);
+          for (let slot = 0; slot < slotsPerDay; slot++) {
+            if (cBusyDay && cBusyDay.has(slot)) continue;
+            for (const tid of demand.teachers) {
+              const subjMap = teacherSubjectRemaining.get(tid);
+              if (!subjMap) continue;
+              const secMap = subjMap.get(demand.subjectId);
+              const left = secMap?.get(demand.sectionId) || 0;
+              if (left <= 0) continue;
+              if (!isTeacherAvailable(tid, day, slot)) continue;
+              // also ensure teacher not busy at that time
+              const tBusyDay = teacherBusy.get(tid)?.get(day);
+              if (tBusyDay && tBusyDay.has(slot)) continue;
 
-            for (const day of workingDays) {
-                for (let slot = 0; slot < slotsPerDay; slot++) {
-                    if (classBusy.get(demand.sectionId)?.get(day)?.has(slot)) continue;
-                    for (const tid of demand.teachers) {
-                        if (!isTeacherAvailable(tid, day, slot, teacherMap, teacherBusy)) continue;
-                        const subjMap = teacherSubjectRemaining.get(tid);
-                        const secMap = subjMap?.get(demand.subjectId);
-                        if (!secMap || (secMap.get(demand.sectionId) || 0) <= 0) continue;
-                        
-                        const candidate = { day, slot, tid, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId };
-                        // In fallback, we use a much simpler score: just try to place it.
-                        // A small score based on teacher load can still be useful.
-                        candidate.score = (teacherDayLoad.get(tid)?.get(day) || 0); 
-
-                        if (!bestFallbackCandidate || candidate.score < bestFallbackCandidate.score) {
-                            bestFallbackCandidate = candidate;
-                        }
-                    }
-                }
+              // place without heavy penalties (lenient)
+              recordAssignment(day, slot, demand, tid);
+              placed = true;
+              break;
             }
-
-            if (bestFallbackCandidate) {
-                placeCandidate(bestFallbackCandidate, context);
-                demand.remaining--;
-                placedInFallback = true;
-                console.log(`Fallback placed: ${demand.subjectId} in ${demand.sectionId}`);
-            }
+            if (placed) continue outer_leftover;
+          }
         }
-        if (demand.remaining > 0) {
-            console.error(`Could not place ${demand.remaining} periods for subject ${demand.subjectId} in section ${demand.sectionId}`);
+        // no place found for this unit -> break to avoid infinite loop
+        if (!placed) {
+          console.log(`فشل في وضع حصة لشعبة ${demand.sectionId} مادة ${demand.subjectId} - لا توجد خانات متاحة أو معلمون متاحون`);
+          break;
         }
+      }
+    }
+    const stillLeft = leftovers.filter(d => d.remaining > 0);
+    if (stillLeft.length > 0) {
+      console.log('=== الطلبات التي لم تُوضع نهائيًا ===');
+      stillLeft.forEach(d => console.log(`شعبة ${d.sectionId} مادة ${d.subjectId}: ${d.remaining} حصة`));
+    } else {
+      console.log('تم وضع جميع الطلبات المتبقية بنجاح');
     }
   }
 
   setTimetable(assignments);
   return assignments;
 }
-
-function isTeacherAvailable(tid, day, slot, teacherMap, teacherBusy) {
-    const t = teacherMap.get(tid);
-    if (!t) return false;
-    if ((t.offDays || []).includes(day)) return false;
-    if ((t.forbiddenSlots || []).includes(slot)) return false;
-    if (Array.isArray(t.forbiddenDaySlots)) {
-      const rule = t.forbiddenDaySlots.find(r => r.day === day);
-      if (rule && Array.isArray(rule.slots) && rule.slots.includes(slot)) return false;
-    }
-    return !teacherBusy.get(tid)?.get(day)?.has(slot);
-}
-
-// ===================================================================================
-// ========================== END TIMETABLE GENERATION V2 ==========================
-// ===================================================================================
 
 function renderTimetableByClass(assignments) {
   const st = loadState();
@@ -2221,8 +2414,9 @@ function renderStats() {
             const tAvail = isTeacherAvailableStatic(t, d, s);
             if (secFree && tAvail) {
               overlapPotential++;
-              const tBusyNow = !(teacherBusy.get(t.id)?.get(d)?.has(s));
-              if (tBusyNow) overlapActuallyFree++;
+              const tBusySet = teacherBusy.get(t.id)?.get(d);
+              const tFreeNow = !(tBusySet && tBusySet.has(s));
+              if (tFreeNow) overlapActuallyFree++;
             }
           }
         }
