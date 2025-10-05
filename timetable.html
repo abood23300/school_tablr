@@ -43,11 +43,10 @@
               <label for="schoolType">نوع المدرسة</label>
               <select id="schoolType">
                 <option value="">— اختر نوع المدرسة —</option>
+                <option value="ابتدائية">ابتدائية</option>
                 <option value="متوسطة">متوسطة</option>
-                <option value="إعدادية علمي وأدبي">إعدادية علمي وأدبي</option>
-                <option value="إعدادية علمي">إعدادية علمي فقط</option>
-                <option value="إعدادية أدبي">إعدادية أدبي فقط</option>
-                <option value="ثانوية كاملة">ثانوية كاملة</option>
+                <option value="اعدادية">إعدادية</option>
+                <option value="ثانوية">ثانوية</option>
               </select>
             </div>
 
@@ -141,24 +140,6 @@
         <!-- تبويب المواد الدراسية -->
         <section class="card tab-section hidden" id="subjects-section">
           <h2>المواد الدراسية</h2>
-          
-          <div class="ministry-subjects-section">
-            <h3>📚 المواد المقررة من الوزارة</h3>
-            <p class="hint">يمكنك إضافة المواد المقررة من وزارة التربية بنقرة واحدة:</p>
-            <div class="actions">
-              <button type="button" id="loadMinistrySubjectsBtn" class="btn primary">
-                📋 تحميل جميع المواد الوزارية
-              </button>
-              <button type="button" id="showMinistrySubjectsBtn" class="btn">
-                👁️ عرض المواد المتاحة
-              </button>
-            </div>
-            <div id="ministrySubjectsPreview" class="ministry-preview hidden"></div>
-          </div>
-
-          <hr style="margin: 20px 0; border: none; border-top: 1px solid #e5e7eb;">
-
-          <h3>➕ إضافة مادة يدوياً</h3>
           <form id="subject-form" class="inline-form">
             <input type="text" id="subjectName" placeholder="اسم المادة (مثال: رياضيات)" required />
             <button type="submit" class="primary">إضافة مادة</button>
@@ -249,7 +230,6 @@
       <div>وقت بدء العمل بالجدول: <span id="startedAt">—</span></div>
     </footer>
 
-    <script src="./js/ministry-curriculum.js"></script>
     <script src="./js/app.js"></script>
   </body>
   </html>
