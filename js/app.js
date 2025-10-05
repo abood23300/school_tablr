@@ -814,6 +814,27 @@ function setupForms() {
   });
 }
 
+// ---------- Helpers: planned counts and capacity per section ----------
+function computeSectionPlannedCounts() {
+  // returns Map<sectionId, totalPlannedPeriods>
+  const m = new Map();
+  const teachers = getTeachers();
+  (teachers||[]).forEach(t => {
+    (t.subjects||[]).forEach(su => {
+      Object.entries(su.perSections || {}).forEach(([secId, cnt]) => {
+        m.set(secId, (m.get(secId)||0) + (cnt||0));
+      });
+    });
+  });
+  return m;
+}
+function getWeeklyCapacity() {
+  const st = loadState();
+  const workingDays = st.school?.workingDays || [];
+  const slotsPerDay = st.school?.slotsPerDay || 6;
+  return workingDays.length * slotsPerDay;
+}
+
 function renderClassesList() {
   const container = $('classesList');
   if (!container) return;
@@ -823,14 +844,29 @@ function renderClassesList() {
     container.textContent = 'لا توجد صفوف بعد.';
     return;
   }
+  const secPlannedMap = computeSectionPlannedCounts();
+  const weeklyCap = getWeeklyCapacity();
   list.forEach(item => {
     const row = document.createElement('div');
     row.className = 'list-item';
     const sectionNames = (item.sections||[]).map(s => s.name).join('، ');
+    // build over-capacity warning per section
+    const overDetails = [];
+    const secs = (item.sections && item.sections.length) ? item.sections : [{ id: item.id, name: item.name }];
+    secs.forEach(sec => {
+      const planned = secPlannedMap.get(sec.id) || 0;
+      if (planned > weeklyCap) {
+        overDetails.push(`${sec.name}: +${planned - weeklyCap}`);
+      }
+    });
+    const warnHtml = overDetails.length
+      ? `<div class="hint" style="color:#b91c1c;">⚠️ تجاوز السعة الأسبوعية — ${overDetails.join('، ')}</div>`
+      : '';
     row.innerHTML = `
       <div>
         <div><strong>${item.name}</strong></div>
         <div class="hint">الشُعب: ${sectionNames || '—'}</div>
+        ${warnHtml}
       </div>
       <div>
         <button class="btn" data-action="edit" data-id="${item.id}">تعديل</button>
@@ -2054,9 +2090,12 @@ function renderStats() {
   }
   // خرائط أسماء مساعدة
   const classSectionName = new Map();
+  const sectionToClass = new Map();
   (st.classes||[]).forEach(c => {
     if (c.sections && c.sections.length) c.sections.forEach(sec => classSectionName.set(sec.id, `${c.name} - ${sec.name}`));
     else classSectionName.set(c.id, c.name);
+    if (c.sections && c.sections.length) c.sections.forEach(sec => sectionToClass.set(sec.id, c.id));
+    else sectionToClass.set(c.id, c.id);
   });
   const subjectName = new Map((st.subjects||[]).map(s => [s.id, s.name]));
   // حساب فعلي لكل معلم (بعد التوليد)
@@ -2105,6 +2144,113 @@ function renderStats() {
     if (!bySec[a.sectionId]) bySec[a.sectionId] = {};
     bySec[a.sectionId][a.subjectId] = (bySec[a.sectionId][a.subjectId] || 0) + 1;
   });
+
+  // تحضيرات تشخيص الأسباب (خارج بناء HTML)
+  // 1) سعة كل شعبة وأشغالها
+  const sectionCapacity = new Map(); // sectionId -> total weekly slots
+  const sectionBusy = new Map(); // sectionId -> Map(day->Set(slot))
+  const allSectionIds = (st.classes||[]).flatMap(c => (c.sections && c.sections.length) ? c.sections.map(sec => sec.id) : [c.id]);
+  allSectionIds.forEach(secId => sectionCapacity.set(secId, workingDays.length * slotsPerDay));
+  assignments.forEach(a => {
+    if (!sectionBusy.has(a.sectionId)) sectionBusy.set(a.sectionId, new Map());
+    const dmap = sectionBusy.get(a.sectionId);
+    if (!dmap.has(a.day)) dmap.set(a.day, new Set());
+    dmap.get(a.day).add(a.slot);
+  });
+  // 2) إجمالي المخطط لكل شعبة
+  const sectionPlannedTotal = new Map();
+  (teachers||[]).forEach(t => {
+    (t.subjects||[]).forEach(su => {
+      Object.entries(su.perSections||{}).forEach(([secId, cnt]) => {
+        sectionPlannedTotal.set(secId, (sectionPlannedTotal.get(secId)||0) + (cnt||0));
+      });
+    });
+  });
+  const sectionOverbookInfo = new Map();
+  sectionPlannedTotal.forEach((planned, secId) => {
+    const cap = sectionCapacity.get(secId) || 0;
+    if (planned > cap) sectionOverbookInfo.set(secId, { planned, capacity: cap, overBy: planned - cap });
+  });
+  // 3) انشغال وتوفر المعلمين
+  const teacherBusy = new Map(); // teacherId -> Map(day->Set(slot))
+  assignments.forEach(a => {
+    if (!teacherBusy.has(a.teacherId)) teacherBusy.set(a.teacherId, new Map());
+    const dmap = teacherBusy.get(a.teacherId);
+    if (!dmap.has(a.day)) dmap.set(a.day, new Set());
+    dmap.get(a.day).add(a.slot);
+  });
+  function isTeacherAvailableStatic(t, day, slot) {
+    if ((t.offDays||[]).includes(day)) return false;
+    if ((t.forbiddenSlots||[]).map(Number).includes(slot)) return false;
+    if (Array.isArray(t.forbiddenDaySlots) && t.forbiddenDaySlots.length) {
+      const rule = t.forbiddenDaySlots.find(r => r.day === day);
+      if (rule && Array.isArray(rule.slots) && rule.slots.map(Number).includes(slot)) return false;
+    }
+    return true;
+  }
+  const teacherStaticCapacity = new Map();
+  teachers.forEach(t => {
+    let cap = 0;
+    for (const d of workingDays) {
+      for (let s=0; s<slotsPerDay; s++) {
+        if (isTeacherAvailableStatic(t, d, s)) cap++;
+      }
+    }
+    teacherStaticCapacity.set(t.id, cap);
+  });
+  // 4) بناء أسباب الفروقات
+  const mismatchReasons = new Map(); // teacherId -> Array<{secId, subjectId, delta, reasons: string[]}>
+  teachers.forEach(t => mismatchReasons.set(t.id, []));
+  teachers.forEach(t => {
+    const plan = teacherPlanned[t.id];
+    const actual = teacherActualDetail[t.id] || {};
+    const tCap = teacherStaticCapacity.get(t.id) || 0;
+    if ((plan?.plannedTotal||0) > tCap) {
+      const diff = (plan.plannedTotal||0) - tCap;
+      mismatchReasons.get(t.id).push({ secId: null, subjectId: null, delta: diff, reasons: [
+        `إجمالي الحصص المخطط (${plan.plannedTotal}) يتجاوز سعة وقت المعلم (${tCap}). راجع أيام OFF والقيود الزمنية.`
+      ]});
+    }
+    Object.entries(plan?.plannedBySectionSubject || {}).forEach(([secId, subjMap]) => {
+      Object.entries(subjMap).forEach(([subId, cntPlanned]) => {
+        const cntActual = (actual[secId]?.[subId]) || 0;
+        const delta = (cntPlanned||0) - cntActual;
+        if (delta <= 0) return;
+        const reasons = [];
+        const classId = sectionToClass.get(secId);
+        if (!Array.isArray(t.classIds) || !t.classIds.includes(classId)) {
+          reasons.push('المعلم غير مربوط بهذه الصف/المرحلة في بطاقة المعلم (قائمة الصفوف).');
+        }
+        if (sectionOverbookInfo.has(secId)) {
+          const info = sectionOverbookInfo.get(secId);
+          reasons.push(`الشعبة محجوزة بأكثر من سعتها: مخطط ${info.planned} مقابل سعة ${info.capacity} (زيادة ${info.overBy}). سيتم إسقاط حصص زائدة حتمًا.`);
+        }
+        let overlapPotential = 0;
+        let overlapActuallyFree = 0;
+        for (const d of workingDays) {
+          for (let s=0; s<slotsPerDay; s++) {
+            const secFree = !(sectionBusy.get(secId)?.get(d)?.has(s));
+            const tAvail = isTeacherAvailableStatic(t, d, s);
+            if (secFree && tAvail) {
+              overlapPotential++;
+              const tBusySet = teacherBusy.get(t.id)?.get(d);
+              const tFreeNow = !(tBusySet && tBusySet.has(s));
+              if (tFreeNow) overlapActuallyFree++;
+            }
+          }
+        }
+        if (overlapPotential === 0) {
+          reasons.push('لا توجد أي نوافذ زمنية مشتركة بين المعلم والشعبة (إما الشعبة ممتلئة أو قيود الوقت لدى المعلم تمنع ذلك).');
+        } else if (overlapActuallyFree === 0) {
+          reasons.push('كل النوافذ المشتركة المتاحة مشغولة فعليًا بسبب حصص أخرى للمعلم في نفس الأوقات.');
+        } else if (overlapActuallyFree < delta) {
+          reasons.push(`النوافذ المشتركة الخالية (${overlapActuallyFree}) أقل من العجز المطلوب (${delta}).`);
+        }
+        mismatchReasons.get(t.id).push({ secId, subjectId: subId, delta, reasons });
+      });
+    });
+  });
+
   // عرض
   let html = '<h3>إحصائيات المعلمين</h3>';
   html += '<p class="hint">مقارنة بين المخطط (ما أُسند للمعلم قبل التوليد) والفعلي (ما خرج بعد التوليد).</p>';
@@ -2163,6 +2309,30 @@ function renderStats() {
     });
     html += `</ul>
       <p><strong>أيام الـ OFF:</strong> ${s.offDays.length ? s.offDays.join('، ') : 'لا توجد'}</p>
+      ${(() => {
+        const diffs = (mismatchReasons.get(t.id) || []).filter(it => it.delta > 0);
+        if (diffs.length === 0) return '';
+        let out = '<div style="margin-top:8px; background:#fafafa; border:1px dashed #ddd; padding:10px; border-radius:6px;">';
+        out += '<h5 style="margin:0 0 6px 0;">أسباب الفروقات</h5>';
+        const generalNotes = diffs.filter(d => !d.secId && !d.subjectId);
+        generalNotes.forEach(d => {
+          out += `<p class=\"hint\">${d.reasons[0]}</p>`;
+        });
+        const specific = diffs.filter(d => d.secId && d.subjectId);
+        if (specific.length) {
+          out += '<ul style="margin:6px 0 0 18px;">';
+          specific.forEach(d => {
+            const secName = classSectionName.get(d.secId) || d.secId;
+            const subName = subjectName.get(d.subjectId) || d.subjectId;
+            out += `<li><strong>${secName} — ${subName}</strong> (عجز ${d.delta})<ul>`;
+            d.reasons.forEach(r => out += `<li class=\"hint\">${r}</li>`);
+            out += '</ul></li>';
+          });
+          out += '</ul>';
+        }
+        out += '</div>';
+        return out;
+      })()}
       <p><strong>الأيام التي لديه دروس:</strong> ${Array.from(s.hasLessonsOn).join('، ') || 'لا توجد'}</p>
     </div>`;
   });
