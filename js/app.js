@@ -1517,8 +1517,8 @@ function generateTimetable() {
   console.log('الطلبات المُنشأة:', demands);
   console.log('========================');
 
-  // Sort demands by scarcity (fewer teachers first)
-  demands.sort((a,b) => a.teachers.length - b.teachers.length || a.remaining - b.remaining);
+  // Sort demands by remaining descending to prioritize high-demand subjects/sections
+  demands.sort((a,b) => b.remaining - a.remaining);
 
   // Timetable structure and load maps
   const assignments = [];
@@ -1620,7 +1620,22 @@ function generateTimetable() {
             // 6. Bonus: Prefer days with no occurrence of this subject yet (strong preference)
             if (subjCount === 0) score -= 50; // مكافأة سالبة (تخفيض النقاط) للأيام الخالية من المادة
 
-            // 7. Small jitter to avoid ties
+            // 7. Balance teacher time slots (early/late fairness)
+            const teacherAssignments = assignments.filter(a => a.teacherId === tid);
+            if (teacherAssignments.length > 0) {
+              const avgSlot = teacherAssignments.reduce((sum, a) => sum + a.slot, 0) / teacherAssignments.length;
+              const slotDiff = Math.abs(slot - avgSlot);
+              score += slotDiff * 3; // عقوبة للابتعاد عن المتوسط الزمني
+            }
+
+            // 8. Strong penalty for teacher concentrating load in one day
+            const teacherTotalPeriods = teacherAssignments.length + 1; // including this one
+            const daysUsed = new Set(teacherAssignments.map(a => a.day)).size;
+            if (daysUsed === 1 && teacherTotalPeriods > 1) {
+              score += 500; // عقوبة قوية للتركيز في يوم واحد
+            }
+
+            // 9. Small jitter to avoid ties
             score += Math.random() * 0.01;
 
             // تضمين معرفات السياق لاستخدامها لاحقًا في حسابات التكرار/التوزيع
@@ -1701,7 +1716,7 @@ function generateTimetable() {
     }
   }
 
-  // Fallback pass: try to place any remaining demand in any free slot with any available teacher
+  // Fallback pass: try to place any remaining demand in any free slot with any available teacher, with relaxed constraints if needed
   const leftovers = demands.filter(d => d.remaining > 0);
   if (leftovers.length > 0) {
     console.log('=== مرحلة التعويض - الطلبات المتبقية ===');
@@ -1731,6 +1746,7 @@ function generateTimetable() {
     for (const demand of leftovers) {
       outer_leftover: while (demand.remaining > 0) {
         let placed = false;
+        // First try strict placement
         for (const day of workingDays) {
           const cBusyDay = classBusy.get(demand.sectionId)?.get(day);
           for (let slot = 0; slot < slotsPerDay; slot++) {
@@ -1746,7 +1762,7 @@ function generateTimetable() {
               const tBusyDay = teacherBusy.get(tid)?.get(day);
               if (tBusyDay && tBusyDay.has(slot)) continue;
 
-              // place without heavy penalties (lenient)
+              // place
               assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
               markBusy(classBusy, demand.sectionId, day, slot);
               markBusy(teacherBusy, tid, day, slot);
@@ -1760,7 +1776,37 @@ function generateTimetable() {
             if (placed) continue outer_leftover;
           }
         }
-        // no place found for this unit -> break to avoid infinite loop
+        // If not placed strictly, try relaxed: allow overbooking class capacity if no other option (but warn)
+        if (!placed) {
+          console.log(`محاولة وضع مرن لشعبة ${demand.sectionId} مادة ${demand.subjectId}`);
+          for (const day of workingDays) {
+            for (let slot = 0; slot < slotsPerDay; slot++) {
+              for (const tid of demand.teachers) {
+                const subjMap = teacherSubjectRemaining.get(tid);
+                if (!subjMap) continue;
+                const secMap = subjMap.get(demand.subjectId);
+                const left = secMap?.get(demand.sectionId) || 0;
+                if (left <= 0) continue;
+                if (!isTeacherAvailable(tid, day, slot)) continue;
+                const tBusyDay = teacherBusy.get(tid)?.get(day);
+                if (tBusyDay && tBusyDay.has(slot)) continue;
+
+                // Allow overbooking class (ignore class busy)
+                assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
+                markBusy(teacherBusy, tid, day, slot); // still mark teacher busy
+                incTeacherDayLoad(tid, day, 1);
+                incClassDaySubject(demand.sectionId, day, demand.subjectId, 1);
+                secMap.set(demand.sectionId, left - 1);
+                demand.remaining--;
+                placed = true;
+                console.log(`تم وضع مرن: شعبة ${demand.sectionId} يوم ${day} حصة ${slot} معلم ${tid}`);
+                break;
+              }
+              if (placed) continue outer_leftover;
+            }
+          }
+        }
+        // no place found
         if (!placed) {
           console.log(`فشل في وضع حصة لشعبة ${demand.sectionId} مادة ${demand.subjectId} - لا توجد خانات متاحة أو معلمون متاحون`);
           break;
@@ -1777,6 +1823,21 @@ function generateTimetable() {
   }
 
   setTimetable(assignments);
+  // Check for overbooked sections and warn
+  const overbooked = [];
+  classes.forEach(cls => {
+    const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id }];
+    sections.forEach(sec => {
+      const assigned = assignments.filter(a => a.sectionId === sec.id).length;
+      const capacity = workingDays.length * slotsPerDay;
+      if (assigned > capacity) {
+        overbooked.push(`${sec.name}: ${assigned} / ${capacity}`);
+      }
+    });
+  });
+  if (overbooked.length > 0) {
+    alert(`تحذير: تم تجاوز السعة الأسبوعية في الشعب التالية:\n${overbooked.join('\n')}\nالجدول غير واقعي، يرجى تعديل البيانات.`);
+  }
   return assignments;
 }
 
@@ -2164,6 +2225,19 @@ function renderStats() {
     statsContainer.innerHTML = '<p>يرجى توليد الجدول أولاً لعرض الإحصائيات.</p>';
     return;
   }
+  // Check for overbooked sections
+  const overbooked = [];
+  (st.classes||[]).forEach(cls => {
+    const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
+    sections.forEach(sec => {
+      const assigned = assignments.filter(a => a.sectionId === sec.id).length;
+      const capacity = workingDays.length * slotsPerDay;
+      if (assigned > capacity) {
+        overbooked.push(`${sec.name}: ${assigned}/${capacity}`);
+      }
+    });
+  });
+  const overbookedHtml = overbooked.length ? `<div class="warning">تحذير: تجاوز السعة في: ${overbooked.join(', ')}</div>` : '';
   // خرائط أسماء مساعدة
   const classSectionName = new Map();
   const sectionToClass = new Map();
@@ -2328,7 +2402,7 @@ function renderStats() {
   });
 
   // عرض
-  let html = '<h3>إحصائيات المعلمين</h3>';
+  let html = '<h3>إحصائيات المعلمين</h3>' + overbookedHtml;
   html += '<p class="hint">مقارنة بين المخطط (ما أُسند للمعلم قبل التوليد) والفعلي (ما خرج بعد التوليد).</p>';
   teachers.forEach(t => {
     const s = teacherStats[t.id];

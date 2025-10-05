@@ -138,49 +138,5 @@ input[type="text"], input[type="number"] { width:100%; padding:10px; border:1px 
 #teacherForbiddenDaySlots th, #teacherForbiddenDaySlots td { border:1px solid #e5e7eb; padding:6px; text-align:center; }
 #teacherForbiddenDaySlots thead th { background:#f9fafb; font-weight:600; }
 
-/* Ministry Subjects Section */
-.ministry-subjects-section { 
-  background: #f0f9ff; 
-  border: 2px solid #bae6fd; 
-  border-radius: 12px; 
-  padding: 16px; 
-  margin-bottom: 20px; 
-}
-.ministry-subjects-section h3 { 
-  margin-top: 0; 
-  color: #0c4a6e; 
-  font-size: 16px; 
-}
-.ministry-preview { 
-  margin-top: 12px; 
-  padding: 12px; 
-  background: #fff; 
-  border: 1px solid #e0f2fe; 
-  border-radius: 8px; 
-  max-height: 400px; 
-  overflow-y: auto; 
-}
-.ministry-preview.hidden { display: none; }
-.ministry-preview h4 { 
-  margin-top: 0; 
-  font-size: 14px; 
-  color: #334155; 
-}
-.ministry-subject-item { 
-  padding: 8px 12px; 
-  margin: 6px 0; 
-  background: #f8fafc; 
-  border: 1px solid #e2e8f0; 
-  border-radius: 6px; 
-  display: flex; 
-  justify-content: space-between; 
-  align-items: center; 
-}
-.ministry-subject-item:hover { 
-  background: #f1f5f9; 
-  border-color: #cbd5e1; 
-}
-.ministry-subject-name { 
-  font-weight: 600; 
-  color: #1e293b; 
-}
+/* Warning styles */
+.warning { background:#fef3c7; border:1px solid #f59e0b; color:#92400e; padding:8px; border-radius:6px; margin-bottom:12px; }
