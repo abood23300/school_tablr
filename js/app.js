@@ -1704,6 +1704,30 @@ function generateTimetable() {
   // Fallback pass: try to place any remaining demand in any free slot with any available teacher
   const leftovers = demands.filter(d => d.remaining > 0);
   if (leftovers.length > 0) {
+    console.log('=== مرحلة التعويض - الطلبات المتبقية ===');
+    leftovers.forEach(d => console.log(`شعبة ${d.sectionId} مادة ${d.subjectId}: ${d.remaining} حصة متبقية`));
+    
+    // Count free slots per section
+    const freeSlotsPerSection = new Map();
+    workingDays.forEach(day => {
+      for (let slot = 0; slot < slotsPerDay; slot++) {
+        classes.forEach(cls => {
+          const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id }];
+          sections.forEach(sec => {
+            const busy = classBusy.get(sec.id)?.get(day)?.has(slot);
+            if (!busy) {
+              freeSlotsPerSection.set(sec.id, (freeSlotsPerSection.get(sec.id) || 0) + 1);
+            }
+          });
+        });
+      }
+    });
+    console.log('الخانات المتاحة لكل شعبة:');
+    freeSlotsPerSection.forEach((count, secId) => console.log(`شعبة ${secId}: ${count} خانة متاحة`));
+    
+    // Sort leftovers by remaining descending to prioritize high-demand
+    leftovers.sort((a,b) => b.remaining - a.remaining);
+    
     for (const demand of leftovers) {
       outer_leftover: while (demand.remaining > 0) {
         let placed = false;
@@ -1737,8 +1761,18 @@ function generateTimetable() {
           }
         }
         // no place found for this unit -> break to avoid infinite loop
-        if (!placed) break;
+        if (!placed) {
+          console.log(`فشل في وضع حصة لشعبة ${demand.sectionId} مادة ${demand.subjectId} - لا توجد خانات متاحة أو معلمون متاحون`);
+          break;
+        }
       }
+    }
+    const stillLeft = leftovers.filter(d => d.remaining > 0);
+    if (stillLeft.length > 0) {
+      console.log('=== الطلبات التي لم تُوضع نهائيًا ===');
+      stillLeft.forEach(d => console.log(`شعبة ${d.sectionId} مادة ${d.subjectId}: ${d.remaining} حصة`));
+    } else {
+      console.log('تم وضع جميع الطلبات المتبقية بنجاح');
     }
   }
 
