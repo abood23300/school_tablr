@@ -250,3 +250,35 @@ input[type="text"], input[type="number"] { width:100%; padding:10px; border:1px 
   background: #fafafa;
   color: #ccc;
 }
+
+/* ========== Unassigned Lesson Boxes in Stats Sidebar ========== */
+.unassigned-lesson-box {
+  display: inline-block;
+  background: white;
+  border: 2px solid #f59e0b;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: grab;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  font-size: 12px;
+  text-align: center;
+  min-width: 120px;
+  user-select: none;
+}
+
+.unassigned-lesson-box:active {
+  cursor: grabbing;
+}
+
+.unassigned-lesson-box.dragging {
+  opacity: 0.5;
+  cursor: grabbing;
+}
+
+.unassigned-boxes {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}

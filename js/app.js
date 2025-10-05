@@ -1973,45 +1973,6 @@ function generateTimetable() {
   return assignments;
 }
 
-// Helper: Render unassigned lessons as draggable cards
-function renderUnassignedLessons(unassigned) {
-  const container = document.getElementById('timetableContainer');
-  
-  const unassignedContainer = document.createElement('div');
-  unassignedContainer.className = 'unassigned-lessons-container';
-  unassignedContainer.innerHTML = '<h3>الحصص غير الموزعة (اسحب وأفلت في الجدول)</h3>';
-  
-  const grid = document.createElement('div');
-  grid.className = 'unassigned-lessons-grid';
-  
-  unassigned.forEach((lesson, index) => {
-    // Create multiple cards if count > 1
-    for (let i = 0; i < lesson.count; i++) {
-      const card = document.createElement('div');
-      card.className = 'unassigned-lesson-card';
-      card.draggable = true;
-      card.dataset.teacherId = lesson.teacherId;
-      card.dataset.subjectId = lesson.subjectId;
-      card.dataset.sectionId = lesson.sectionId;
-      card.dataset.source = 'unassigned';
-      
-      card.innerHTML = `
-        <div class="card-subject">${lesson.subjectName}</div>
-        <div class="card-teacher">${lesson.teacherName}</div>
-        <div class="card-section">${lesson.sectionName}</div>
-      `;
-      
-      card.addEventListener('dragstart', handleDragStart);
-      card.addEventListener('dragend', handleDragEnd);
-      
-      grid.appendChild(card);
-    }
-  });
-  
-  unassignedContainer.appendChild(grid);
-  container.insertBefore(unassignedContainer, container.firstChild);
-}
-
 // Drag-and-drop event handlers
 let draggedElement = null;
 let draggedData = null;
@@ -2026,7 +1987,7 @@ function handleDragStart(e) {
     sectionId: e.target.dataset.sectionId,
     source: e.target.dataset.source,
     day: e.target.dataset.day,
-    slot: e.target.dataset.slot
+    slot: parseInt(e.target.dataset.slot)
   };
   
   e.dataTransfer.effectAllowed = 'move';
@@ -2088,14 +2049,14 @@ function handleDrop(e) {
   // Check if dropping on the same cell (no-op)
   if (draggedData.source === 'table' && 
       draggedData.day === targetDay && 
-      draggedData.slot === targetSlot &&
+      parseInt(draggedData.slot) === targetSlot &&
       draggedData.sectionId === targetSectionId) {
     return false;
   }
   
   // Check if target cell has existing assignment
   const existingIndex = assignments.findIndex(a => 
-    a.day === targetDay && a.slot === targetSlot && a.sectionId === targetSectionId
+    a.day === targetDay && parseInt(a.slot) === targetSlot && a.sectionId === targetSectionId
   );
   
   // Scenario 1: From unassigned card to empty cell
@@ -2120,45 +2081,12 @@ function handleDrop(e) {
       slot: targetSlot
     };
     draggedElement.remove();
-    
-    // Add old assignment back to unassigned
-    const unassignedContainer = document.querySelector('.unassigned-lessons-grid');
-    if (unassignedContainer) {
-      const subjects = new Map((st.subjects||[]).map(s => [s.id, s.name]));
-      const teachers = new Map((st.teachers||[]).map(t => [t.id, t.name]));
-      const classSectionMap = new Map();
-      (st.classes || []).forEach(cls => {
-        if (cls.sections && cls.sections.length) {
-          cls.sections.forEach(sec => classSectionMap.set(sec.id, sec.name));
-        } else {
-          classSectionMap.set(cls.id, cls.name);
-        }
-      });
-      
-      const card = document.createElement('div');
-      card.className = 'unassigned-lesson-card';
-      card.draggable = true;
-      card.dataset.teacherId = oldAssignment.teacherId;
-      card.dataset.subjectId = oldAssignment.subjectId;
-      card.dataset.sectionId = oldAssignment.sectionId;
-      card.dataset.source = 'unassigned';
-      
-      card.innerHTML = `
-        <div class="card-subject">${subjects.get(oldAssignment.subjectId) || ''}</div>
-        <div class="card-teacher">${teachers.get(oldAssignment.teacherId) || ''}</div>
-        <div class="card-section">${classSectionMap.get(oldAssignment.sectionId) || ''}</div>
-      `;
-      
-      card.addEventListener('dragstart', handleDragStart);
-      card.addEventListener('dragend', handleDragEnd);
-      
-      unassignedContainer.appendChild(card);
-    }
+    // Note: الحصة القديمة ستظهر تلقائياً في الإحصائيات عند إعادة العرض
   }
   // Scenario 3: From table cell to another cell (move or swap)
   else if (draggedData.source === 'table') {
     const sourceIndex = assignments.findIndex(a =>
-      a.day === draggedData.day && a.slot === draggedData.slot && a.sectionId === draggedData.sectionId
+      a.day === draggedData.day && parseInt(a.slot) === parseInt(draggedData.slot) && a.sectionId === draggedData.sectionId
     );
     
     if (sourceIndex !== -1) {
@@ -2258,12 +2186,6 @@ function renderTimetableByClass(assignments) {
   const slotTimes = st.school?.slotTimes || [];
   const container = document.getElementById('timetableContainer');
   container.innerHTML = '';
-  
-  // Calculate and render unassigned lessons
-  const unassigned = calculateUnassignedLessons(st, assignments);
-  if (unassigned.length > 0) {
-    renderUnassignedLessons(unassigned);
-  }
 
   classes.forEach(cls => {
     const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
@@ -2871,10 +2793,60 @@ function renderStats() {
     const s = teacherStats[t.id];
     const p = teacherPlanned[t.id];
     const detailActual = teacherActualDetail[t.id] || {};
+    const plannedTotal = p?.plannedTotal || 0;
+    const actualTotal = s.totalPeriods;
+    const remaining = plannedTotal - actualTotal;
+    
     html += `<div class="teacher-stat" style="border:1px solid #e5e7eb; padding:12px; margin-bottom:12px; border-radius:8px;">
       <h4 style="margin-top:0;">${s.name}</h4>
-      <p><strong>إجمالي الحصص (مخطط):</strong> ${p?.plannedTotal || 0}</p>
-      <p><strong>إجمالي الحصص (فعلي):</strong> ${s.totalPeriods}</p>
+      <p><strong>إجمالي الحصص (مخطط):</strong> ${plannedTotal}</p>
+      <p><strong>إجمالي الحصص (فعلي):</strong> ${actualTotal}</p>`;
+    
+    // عرض مربعات الحصص غير الموزعة
+    if (remaining > 0) {
+      html += `<div style="margin: 10px 0;">
+        <p style="margin: 5px 0; font-weight: bold; color: #f59e0b;">⚠️ حصص غير موزعة: ${remaining}</p>
+        <div class="unassigned-boxes" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">`;
+      
+      // إنشاء مربع لكل حصة غير موزعة حسب المادة والشعبة
+      Object.entries(p?.plannedBySectionSubject || {}).forEach(([secId, subjMap]) => {
+        Object.entries(subjMap).forEach(([subId, cntPlanned]) => {
+          const cntActual = (detailActual[secId]?.[subId]) || 0;
+          const delta = cntPlanned - cntActual;
+          if (delta > 0) {
+            const secName = classSectionName.get(secId) || secId;
+            const subName = subjectName.get(subId) || subId;
+            for (let i = 0; i < delta; i++) {
+              html += `<div class="unassigned-lesson-box" draggable="true" 
+                data-teacher-id="${t.id}" 
+                data-subject-id="${subId}" 
+                data-section-id="${secId}"
+                data-source="unassigned"
+                style="
+                  background: #fff;
+                  border: 2px solid #f59e0b;
+                  border-radius: 6px;
+                  padding: 8px 12px;
+                  cursor: grab;
+                  font-size: 12px;
+                  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                  transition: all 0.2s;
+                  min-width: 120px;
+                  text-align: center;"
+                onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(245,158,11,0.3)';"
+                onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.1)';">
+                <div style="font-weight: bold; color: #1f2937;">${subName}</div>
+                <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">${secName}</div>
+              </div>`;
+            }
+          }
+        });
+      });
+      
+      html += `</div></div>`;
+    }
+    
+    html += `
       <div style="display:flex; gap:24px; flex-wrap:wrap;">
         <div style="flex:1; min-width:260px;">
           <h5>تفصيل مخطط</h5>
@@ -2950,4 +2922,10 @@ function renderStats() {
     </div>`;
   });
   statsContainer.innerHTML = html;
+  
+  // إضافة event listeners للمربعات القابلة للسحب
+  document.querySelectorAll('.unassigned-lesson-box').forEach(box => {
+    box.addEventListener('dragstart', handleDragStart);
+    box.addEventListener('dragend', handleDragEnd);
+  });
 }
