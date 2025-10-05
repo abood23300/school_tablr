@@ -6,9 +6,11 @@ const PROJECT_STORE = 'projects';
 const CATALOG_STORE = 'catalog';
 let ACTIVE_PROJECT_ID = null;
 let IN_MEMORY_STATE = null;
+let DB_CONNECTION = null; // Cached DB connection
 
 // -------- IndexedDB helpers --------
 function openDB() {
+  if (DB_CONNECTION) return Promise.resolve(DB_CONNECTION);
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (e) => {
@@ -21,7 +23,10 @@ function openDB() {
         db.createObjectStore(CATALOG_STORE, { keyPath: 'id' });
       }
     };
-    req.onsuccess = () => resolve(req.result);
+    req.onsuccess = () => {
+      DB_CONNECTION = req.result;
+      resolve(DB_CONNECTION);
+    };
     req.onerror = () => reject(req.error);
   });
 }
@@ -208,6 +213,57 @@ function saveState(partial) {
 
 function $(id) { return document.getElementById(id); }
 
+// -------- Central UI Refresh --------
+function refreshUIFromState(state) {
+  if (!state || !state.school) return;
+  const school = state.school;
+  
+  // Fill school settings
+  $('schoolName').value = school.name || '';
+  $('slotsPerDay').value = school.slotsPerDay || 6;
+  if ($('firstLessonStart')) $('firstLessonStart').value = school.firstLessonStart || '';
+  if ($('lessonDuration')) $('lessonDuration').value = school.lessonDuration || '';
+  if ($('breakDuration')) $('breakDuration').value = school.breakDuration || '';
+  if ($('schoolType')) $('schoolType').value = school.type || '';
+  
+  // School type and branches
+  const branchesRow = document.getElementById('branchesRow');
+  if (school.type === 'اعدادية' || school.type === 'ثانوية') {
+    branchesRow?.classList.remove('hidden-row');
+  } else {
+    branchesRow?.classList.add('hidden-row');
+  }
+  const branchesSet = new Set(school.branches || []);
+  document.querySelectorAll('#schoolBranches input[type="checkbox"]').forEach(chk => {
+    chk.checked = branchesSet.has(chk.value);
+  });
+  
+  // Working days
+  renderWorkingDays(DEFAULT_DAYS, school.workingDays || DEFAULT_DAYS.filter(d => d !== 'الجمعة' && d !== 'السبت'));
+  
+  // Slot times
+  const sCount = school.slotsPerDay || 6;
+  const prefillTimes = (school.slotTimes && school.slotTimes.length)
+    ? school.slotTimes
+    : ((school.firstLessonStart && school.lessonDuration)
+        ? autoCalcSlotTimes(school.firstLessonStart, parseInt(school.lessonDuration,10)||0, parseInt(school.breakDuration||'0',10)||0, sCount)
+        : []);
+  renderSlotTimesEditor(sCount, prefillTimes);
+  
+  // Update preview
+  updatePreview(state);
+  
+  // Refresh lists
+  renderClassesList();
+  renderSubjectsList();
+  renderTeachersList();
+  renderSubjectsCatalog();
+  
+  // Print header
+  const ph = document.getElementById('printHeader');
+  if (ph) ph.textContent = state.printHeader || defaultPrintHeader(state);
+}
+
 function formatDateTime(dt) {
   try {
     return new Intl.DateTimeFormat('ar', {
@@ -267,39 +323,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Bootstrap UI
   const latest = loadState();
-  const school = latest.school || {};
-
-  // Fill inputs
-  $('schoolName').value = school.name || '';
-  $('slotsPerDay').value = school.slotsPerDay || 6;
-  // Auto-calc inputs
-  if ($('firstLessonStart')) $('firstLessonStart').value = school.firstLessonStart || '';
-  if ($('lessonDuration')) $('lessonDuration').value = school.lessonDuration || '';
-  if ($('breakDuration')) $('breakDuration').value = school.breakDuration || '';
-  // School type and branches
-  if ($('schoolType')) $('schoolType').value = school.type || '';
-  const branchesRow = document.getElementById('branchesRow');
-  if (school.type === 'اعدادية' || school.type === 'ثانوية') {
-    branchesRow?.classList.remove('hidden-row');
-  } else {
-    branchesRow?.classList.add('hidden-row');
-  }
-  const branchesSet = new Set(school.branches || []);
-  document.querySelectorAll('#schoolBranches input[type="checkbox"]').forEach(chk => {
-    chk.checked = branchesSet.has(chk.value);
-  });
-  renderWorkingDays(DEFAULT_DAYS, school.workingDays || DEFAULT_DAYS.filter(d => d !== 'الجمعة' && d !== 'السبت'));
-
-  // Render slot times editor (prefill from stored times or auto-calc if available)
-  const initialSlotsCount = school.slotsPerDay || 6;
-  const prefillTimesInit = (school.slotTimes && school.slotTimes.length)
-    ? school.slotTimes
-    : ((school.firstLessonStart && school.lessonDuration)
-        ? autoCalcSlotTimes(school.firstLessonStart, parseInt(school.lessonDuration,10)||0, parseInt(school.breakDuration||'0',10)||0, initialSlotsCount)
-        : []);
-  renderSlotTimesEditor(initialSlotsCount, prefillTimesInit);
-
-  updatePreview(loadState());
+  refreshUIFromState(latest);
 
   // Handlers
   $('setup-form').addEventListener('submit', (e) => {
@@ -439,27 +463,8 @@ function setupProjectsUI() {
     IN_MEMORY_STATE = p.state;
     localStorage.setItem('stt-active-project', ACTIVE_PROJECT_ID);
     // Refresh UI
-  // Rebuild editors and lists
-    const latest = loadState();
-    $('schoolName').value = latest.school?.name || '';
-    $('slotsPerDay').value = latest.school?.slotsPerDay || 6;
-  if ($('firstLessonStart')) $('firstLessonStart').value = latest.school?.firstLessonStart || '';
-  if ($('lessonDuration')) $('lessonDuration').value = latest.school?.lessonDuration || '';
-  if ($('breakDuration')) $('breakDuration').value = latest.school?.breakDuration || '';
-    renderWorkingDays(DEFAULT_DAYS, latest.school?.workingDays || DEFAULT_DAYS.filter(d => d !== 'الجمعة' && d !== 'السبت'));
-    const sCount = latest.school?.slotsPerDay || 6;
-    const prefillTimes = (latest.school?.slotTimes && latest.school.slotTimes.length)
-      ? latest.school.slotTimes
-      : ((latest.school?.firstLessonStart && latest.school?.lessonDuration)
-          ? autoCalcSlotTimes(latest.school.firstLessonStart, parseInt(latest.school.lessonDuration,10)||0, parseInt(latest.school.breakDuration||'0',10)||0, sCount)
-          : []);
-    renderSlotTimesEditor(sCount, prefillTimes);
-    updatePreview(latest);
-    renderClassesList();
-    renderSubjectsList();
-    renderTeachersList();
-    renderSubjectsCatalog();
-    document.querySelector('[data-target="setup-section"]').click();
+    refreshUIFromState(loadState());
+    document.querySelector('[data-target="setup-section"]')?.click();
   });
 
   newBtn?.addEventListener('click', async () => {
@@ -477,7 +482,8 @@ function setupProjectsUI() {
     localStorage.setItem('stt-active-project', ACTIVE_PROJECT_ID);
     renderProjectsBar(all, ACTIVE_PROJECT_ID);
     // Refresh UI
-    location.reload();
+    refreshUIFromState(loadState());
+    document.querySelector('[data-target="setup-section"]')?.click();
   });
 
   renameBtn?.addEventListener('click', async () => {
@@ -516,7 +522,8 @@ function setupProjectsUI() {
     IN_MEMORY_STATE = projects[0].state;
     localStorage.setItem('stt-active-project', ACTIVE_PROJECT_ID);
     renderProjectsBar(projects, ACTIVE_PROJECT_ID);
-    location.reload();
+    refreshUIFromState(loadState());
+    document.querySelector('[data-target="setup-section"]')?.click();
   });
 }
 
@@ -1629,7 +1636,9 @@ function generateTimetable() {
   }
 
   function recordAssignment(day, slot, demand, tid) {
-    assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
+    const assignment = { day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid };
+    assignments.push(assignment);
+    indexAssignment(day, slot, assignment);
     markBusy(classBusy, demand.sectionId, day, slot);
     markBusy(teacherBusy, tid, day, slot);
     incTeacherDayLoad(tid, day, 1);
@@ -1647,6 +1656,7 @@ function generateTimetable() {
 
   function releaseAssignment(assignment) {
     const { day, slot, sectionId, subjectId, teacherId } = assignment;
+    unindexAssignment(day, slot, assignment);
     const classDayMap = classBusy.get(sectionId)?.get(day);
     classDayMap?.delete(slot);
     if (classDayMap && classDayMap.size === 0) {
@@ -1667,6 +1677,82 @@ function generateTimetable() {
     const secMap = subjMap?.get(subjectId);
     if (secMap) {
       secMap.set(sectionId, (secMap.get(sectionId) || 0) + 1);
+    }
+  }
+
+  // Helper: Calculate score for a candidate placement
+  function calculatePlacementScore(tid, day, slot, demand, assignmentsBySlot) {
+    let score = 0;
+    const category = getSlotCategory(slot);
+    
+    // 1. CRITICAL: Avoid repeating same subject in same day for same class
+    const subjCount = classDaySubjectCount.get(demand.sectionId)?.get(day)?.get(demand.subjectId) || 0;
+    if (subjCount > 0) score += 1000 * subjCount;
+
+    // 2. HIGH: Penalty if adjacent slot has same subject (use pre-indexed map)
+    const daySlotKey = `${day}-${slot}`;
+    const prevKey = `${day}-${slot-1}`;
+    const nextKey = `${day}-${slot+1}`;
+    if (assignmentsBySlot.has(prevKey) || assignmentsBySlot.has(nextKey)) {
+      const prevMatch = assignmentsBySlot.get(prevKey)?.some(a => a.sectionId === demand.sectionId && a.subjectId === demand.subjectId);
+      const nextMatch = assignmentsBySlot.get(nextKey)?.some(a => a.sectionId === demand.sectionId && a.subjectId === demand.subjectId);
+      if (prevMatch || nextMatch) score += 200;
+    }
+
+    // 3. MEDIUM: Spread class load across days
+    const classDayLoad = (classBusy.get(demand.sectionId)?.get(day)?.size) || 0;
+    score += classDayLoad * 5;
+
+    // 4. Balance teacher load across days
+    const tLoad = teacherDayLoad.get(tid)?.get(day) || 0;
+    const idealDaily = teacherIdealDailyLoad.get(tid) || 0;
+    const projectedDiff = Math.abs(tLoad + 1 - idealDaily);
+    score += projectedDiff * 90;
+    if (tLoad < idealDaily) score -= Math.min(idealDaily - tLoad, 1) * 35;
+
+    // 5. Diversify sections taught by teacher in same day
+    const sectionRepeatCount = teacherDaySectionCount.get(tid)?.get(day)?.get(demand.sectionId) || 0;
+    if (sectionRepeatCount > 0) {
+      score += 250 * (sectionRepeatCount + 1);
+    } else {
+      score -= 10;
+    }
+
+    // 6. Balance slot categories (early/mid/late)
+    const catMap = teacherCategoryLoad.get(tid);
+    const catCount = catMap?.get(category) || 0;
+    const idealCat = teacherIdealCategoryLoad.get(tid)?.get(category) ?? ((teacherTotalLoad.get(tid) || 0) / Math.max(1, uniqueSlotCategories.length));
+    const catDiff = Math.abs(catCount + 1 - idealCat);
+    score += catDiff * 60;
+    if (catCount < idealCat) score -= Math.min(idealCat - catCount, 1) * 15;
+
+    // 7. Teacher breaks
+    const tBusyDay = teacherBusy.get(tid)?.get(day);
+    if (tBusyDay && (tBusyDay.has(slot-1) || tBusyDay.has(slot+1))) score += 10;
+
+    // 8. Bonus for days without this subject
+    if (subjCount === 0) score -= 50;
+
+    // 9. Small jitter
+    score += Math.random() * 0.01;
+    
+    return score;
+  }
+
+  // Pre-index assignments by day-slot for faster adjacency lookups
+  const assignmentsBySlot = new Map();
+  function indexAssignment(day, slot, assignment) {
+    const key = `${day}-${slot}`;
+    if (!assignmentsBySlot.has(key)) assignmentsBySlot.set(key, []);
+    assignmentsBySlot.get(key).push(assignment);
+  }
+  function unindexAssignment(day, slot, assignment) {
+    const key = `${day}-${slot}`;
+    const list = assignmentsBySlot.get(key);
+    if (list) {
+      const idx = list.indexOf(assignment);
+      if (idx >= 0) list.splice(idx, 1);
+      if (list.length === 0) assignmentsBySlot.delete(key);
     }
   }
 
@@ -1700,65 +1786,8 @@ function generateTimetable() {
             const left = secMap?.get(demand.sectionId) || 0;
             if (left <= 0) continue;
 
-            // scoring
-            let score = 0;
-            const category = getSlotCategory(slot);
-            
-            // 1. CRITICAL: Avoid repeating same subject in same day for same class (progressive penalty)
-            const subjCount = classDaySubjectCount.get(demand.sectionId)?.get(day)?.get(demand.subjectId) || 0;
-            if (subjCount > 0) {
-              score += 1000 * subjCount;
-            }
-
-            // 2. HIGH: Penalty if adjacent slot already has same subject for this class
-            const prev = assignments.find(a => a.sectionId === demand.sectionId && a.day === day && a.slot === slot-1 && a.subjectId === demand.subjectId);
-            const next = assignments.find(a => a.sectionId === demand.sectionId && a.day === day && a.slot === slot+1 && a.subjectId === demand.subjectId);
-            if (prev || next) score += 200;
-
-            // 3. MEDIUM: Spread class load across days
-            const classDayLoad = (classBusy.get(demand.sectionId)?.get(day)?.size) || 0;
-            score += classDayLoad * 5;
-
-            // 4. Balance teacher load across days (close to ideal)
-            const tLoad = teacherDayLoad.get(tid)?.get(day) || 0;
-            const idealDaily = teacherIdealDailyLoad.get(tid) || 0;
-            const projectedLoad = tLoad + 1;
-            const projectedDiff = Math.abs(projectedLoad - idealDaily);
-            score += projectedDiff * 90;
-            if (tLoad < idealDaily) {
-              score -= Math.min(idealDaily - tLoad, 1) * 35;
-            }
-
-            // 5. Diversify sections taught by the teacher in the same day
-            const sectionRepeatCount = teacherDaySectionCount.get(tid)?.get(day)?.get(demand.sectionId) || 0;
-            if (sectionRepeatCount > 0) {
-              score += 250 * (sectionRepeatCount + 1);
-            } else {
-              score -= 10;
-            }
-
-            // 6. Balance slot categories (early / mid / late)
-            const catMap = teacherCategoryLoad.get(tid);
-            const catCount = catMap?.get(category) || 0;
-            const idealCat = teacherIdealCategoryLoad.get(tid)?.get(category) ?? ((teacherTotalLoad.get(tid) || 0) / Math.max(1, uniqueSlotCategories.length));
-            const projectedCat = catCount + 1;
-            const catDiff = Math.abs(projectedCat - idealCat);
-            score += catDiff * 60;
-            if (catCount < idealCat) {
-              score -= Math.min(idealCat - catCount, 1) * 15;
-            }
-
-            // 7. Give teacher breaks if possible
-            const tBusyDay = teacherBusy.get(tid)?.get(day);
-            if (tBusyDay && (tBusyDay.has(slot-1) || tBusyDay.has(slot+1))) score += 10;
-
-            // 8. Bonus: Prefer days with no occurrence of this subject yet (strong preference)
-            if (subjCount === 0) score -= 50;
-
-            // 9. Small jitter to avoid ties
-            score += Math.random() * 0.01;
-
-            // تضمين معرفات السياق لاستخدامها لاحقًا في حسابات التكرار/التوزيع
+            // Calculate score using helper
+            const score = calculatePlacementScore(tid, day, slot, demand, assignmentsBySlot);
             candidates.push({ day, slot, tid, score, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId });
           }
         }
