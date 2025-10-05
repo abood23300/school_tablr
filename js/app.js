@@ -1973,6 +1973,127 @@ function generateTimetable() {
   return assignments;
 }
 
+// Helper: Render floating unassigned lessons box
+function renderFloatingUnassignedBox() {
+  const st = loadState();
+  const assignments = getTimetable() || [];
+  const teachers = st.teachers || [];
+  const subjects = new Map((st.subjects||[]).map(s => [s.id, s]));
+  const classSectionMap = new Map();
+  
+  // Build section map
+  (st.classes || []).forEach(cls => {
+    if (cls.sections && cls.sections.length) {
+      cls.sections.forEach(sec => classSectionMap.set(sec.id, { classId: cls.id, className: cls.name, ...sec }));
+    } else {
+      classSectionMap.set(cls.id, { classId: cls.id, className: cls.name, id: cls.id, name: cls.name });
+    }
+  });
+  
+  // Count assigned lessons per teacher/subject/section
+  const assignedCount = new Map();
+  assignments.forEach(a => {
+    const key = `${a.teacherId}|${a.subjectId}|${a.sectionId}`;
+    assignedCount.set(key, (assignedCount.get(key) || 0) + 1);
+  });
+  
+  // Calculate unassigned from teachers' allocations
+  const unassignedByTeacher = new Map(); // teacherId -> array of lessons
+  let totalUnassigned = 0;
+  
+  teachers.forEach(teacher => {
+    const teacherLessons = [];
+    (teacher.subjects || []).forEach(ts => {
+      (ts.sections || []).forEach(sectionId => {
+        const key = `${teacher.id}|${ts.subjectId}|${sectionId}`;
+        const planned = ts.periodsPerWeek || 0;
+        const assigned = assignedCount.get(key) || 0;
+        const remaining = planned - assigned;
+        
+        if (remaining > 0) {
+          const subject = subjects.get(ts.subjectId);
+          const section = classSectionMap.get(sectionId);
+          if (subject && section) {
+            for (let i = 0; i < remaining; i++) {
+              teacherLessons.push({
+                teacherId: teacher.id,
+                teacherName: teacher.name,
+                subjectId: ts.subjectId,
+                subjectName: subject.name,
+                sectionId: sectionId,
+                sectionName: section.name
+              });
+              totalUnassigned++;
+            }
+          }
+        }
+      });
+    });
+    
+    if (teacherLessons.length > 0) {
+      unassignedByTeacher.set(teacher.id, { name: teacher.name, lessons: teacherLessons });
+    }
+  });
+  
+  // Remove old floating box if exists
+  const oldBox = document.getElementById('floatingUnassignedBox');
+  if (oldBox) oldBox.remove();
+  
+  // Don't create box if no unassigned lessons
+  if (totalUnassigned === 0) return;
+  
+  // Create floating box
+  const floatingBox = document.createElement('div');
+  floatingBox.id = 'floatingUnassignedBox';
+  floatingBox.className = 'floating-unassigned-box';
+  
+  let html = `
+    <div class="floating-box-header" onclick="this.parentElement.classList.toggle('collapsed')">
+      <span class="floating-box-title">📚 حصص غير موزعة (${totalUnassigned})</span>
+      <span class="floating-box-toggle">▼</span>
+    </div>
+    <div class="floating-box-content">`;
+  
+  unassignedByTeacher.forEach((data, teacherId) => {
+    html += `
+      <div class="teacher-group">
+        <div class="teacher-name">👨‍🏫 ${data.name} <span class="badge">${data.lessons.length}</span></div>
+        <div class="lessons-grid">`;
+    
+    data.lessons.forEach(lesson => {
+      html += `
+        <div class="unassigned-lesson-card" draggable="true"
+          data-teacher-id="${lesson.teacherId}"
+          data-subject-id="${lesson.subjectId}"
+          data-section-id="${lesson.sectionId}"
+          data-source="unassigned"
+          title="${lesson.teacherName} - ${lesson.subjectName} - ${lesson.sectionName}">
+          <div class="card-subject">${lesson.subjectName}</div>
+          <div class="card-section">${lesson.sectionName}</div>
+        </div>`;
+    });
+    
+    html += `
+        </div>
+      </div>`;
+  });
+  
+  html += `
+    </div>
+    <div class="floating-box-footer">
+      <small>💡 اسحب الحصص إلى الجدول أو اسحب من الجدول هنا للحذف</small>
+    </div>`;
+  
+  floatingBox.innerHTML = html;
+  document.body.appendChild(floatingBox);
+  
+  // Add drag handlers to all cards
+  floatingBox.querySelectorAll('.unassigned-lesson-card').forEach(card => {
+    card.addEventListener('dragstart', handleDragStart);
+    card.addEventListener('dragend', handleDragEnd);
+  });
+}
+
 // Drag-and-drop event handlers
 let draggedElement = null;
 let draggedData = null;
@@ -2118,6 +2239,7 @@ function handleDrop(e) {
   setTimetable(assignments);
   renderTimetableByClass(assignments);
   renderStats();
+  renderFloatingUnassignedBox(); // تحديث الصندوق العائم
   
   return false;
 }
@@ -2420,6 +2542,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setTimetable(assignments);
         renderTimetableByClass(assignments);
         renderStats();
+        renderFloatingUnassignedBox(); // تحديث الصندوق العائم
       }
     }
   });
@@ -2429,17 +2552,33 @@ document.addEventListener('DOMContentLoaded', () => {
     if (assignments.length) {
       renderTimetableByClass(assignments);
       renderStats(); // إضافة الإحصائيات
+      renderFloatingUnassignedBox(); // عرض الصندوق العائم
     } else {
       container.innerHTML = '';
+      // Remove floating box if no assignments
+      const floatingBox = document.getElementById('floatingUnassignedBox');
+      if (floatingBox) floatingBox.remove();
     }
   });
   document.querySelectorAll('.view-toggle .btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const assignments = getTimetable();
       const view = btn.getAttribute('data-view');
-      if (view === 'by-class') { renderTimetableByClass(assignments); CURRENT_VIEW = 'by-class'; }
-      else if (view === 'by-teacher') { renderTimetableByTeacher(assignments); CURRENT_VIEW = 'by-teacher'; }
-      else if (view === 'combined-class') { renderCombinedByClass(assignments); CURRENT_VIEW = 'combined-class'; }
+      if (view === 'by-class') { 
+        renderTimetableByClass(assignments); 
+        CURRENT_VIEW = 'by-class';
+        renderFloatingUnassignedBox(); // عرض الصندوق العائم في وضع الصف
+      }
+      else if (view === 'by-teacher') { 
+        renderTimetableByTeacher(assignments); 
+        CURRENT_VIEW = 'by-teacher';
+        renderFloatingUnassignedBox(); // عرض الصندوق العائم في وضع المعلم
+      }
+      else if (view === 'combined-class') { 
+        renderCombinedByClass(assignments); 
+        CURRENT_VIEW = 'combined-class';
+        renderFloatingUnassignedBox(); // عرض الصندوق العائم في الوضع المجمع
+      }
     });
   });
 
