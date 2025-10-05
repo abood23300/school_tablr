@@ -1867,7 +1867,66 @@ function generateTimetable() {
         }
         // no place found for this unit -> break to avoid infinite loop
         if (!placed) {
-          console.log(`فشل في وضع حصة لشعبة ${demand.sectionId} مادة ${demand.subjectId} - لا توجد خانات متاحة أو معلمون متاحون`);
+          const reasonCounts = new Map();
+          const pushReason = (key) => {
+            reasonCounts.set(key, (reasonCounts.get(key) || 0) + 1);
+          };
+          for (const day of workingDays) {
+            const cBusyDay = classBusy.get(demand.sectionId)?.get(day);
+            for (let slot = 0; slot < slotsPerDay; slot++) {
+              if (cBusyDay && cBusyDay.has(slot)) {
+                pushReason(`الشعبة مشغولة - ${day} ${slot+1}`);
+                continue;
+              }
+              let anyTeacherEvaluated = false;
+              for (const tid of demand.teachers) {
+                anyTeacherEvaluated = true;
+                const subjMap = teacherSubjectRemaining.get(tid);
+                if (!subjMap) {
+                  pushReason(`المعلم ${tid} لا يدرّس هذه المادة بعد الآن`);
+                  continue;
+                }
+                const secMap = subjMap.get(demand.subjectId);
+                const left = secMap?.get(demand.sectionId) || 0;
+                if (left <= 0) {
+                  pushReason(`المعلم ${tid} استوفى حصصه للشعبة`);
+                  continue;
+                }
+                const t = teacherMap.get(tid);
+                if (!t) {
+                  pushReason(`المعلم ${tid} محذوف من القائمة`);
+                  continue;
+                }
+                if ((t.offDays || []).includes(day)) {
+                  pushReason(`المعلم ${t.name} في إجازة يوم ${day}`);
+                  continue;
+                }
+                if ((t.forbiddenSlots || []).includes(slot)) {
+                  pushReason(`المعلم ${t.name} يمنع حصة ${slot+1}`);
+                  continue;
+                }
+                if (Array.isArray(t.forbiddenDaySlots) && t.forbiddenDaySlots.length) {
+                  const rule = t.forbiddenDaySlots.find(r => r.day === day);
+                  if (rule && Array.isArray(rule.slots) && rule.slots.includes(slot)) {
+                    pushReason(`المعلم ${t.name} يمنع الفترة ${day} الحصة ${slot+1}`);
+                    continue;
+                  }
+                }
+                const tBusyDay = teacherBusy.get(tid)?.get(day);
+                if (tBusyDay && tBusyDay.has(slot)) {
+                  pushReason(`المعلم ${t.name} لديه حصة أخرى ${day} الحصة ${slot+1}`);
+                  continue;
+                }
+                // إذا وصلنا هنا فهذا المكان متاح فعليًا
+                pushReason(`متاح لكن لم يُختَر - ${day} الحصة ${slot+1} مع ${t.name}`);
+              }
+              if (!anyTeacherEvaluated) {
+                pushReason('لا يوجد معلمون متبقون لهذه المادة');
+              }
+            }
+          }
+          console.log(`فشل في وضع حصة لشعبة ${demand.sectionId} مادة ${demand.subjectId}`);
+          console.log('أسباب الرفض:', Array.from(reasonCounts.entries()));
           break;
         }
       }
