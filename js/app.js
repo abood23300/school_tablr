@@ -1489,7 +1489,8 @@ function generateTimetable() {
     sections.forEach(sec => {
       subjects.forEach(sub => {
         // teachers who have perSections allocation for this section and subject
-        const capable = teachers.filter(t => t.classIds.includes(cls.id)).filter(t => {
+        // Note: rely on perSections itself; do NOT require classIds linkage to avoid accidental exclusion
+        const capable = teachers.filter(t => {
           const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
           return rec && rec.perSections && typeof rec.perSections[sec.id] === 'number' && rec.perSections[sec.id] > 0;
         });
@@ -1696,6 +1697,47 @@ function generateTimetable() {
         } else {
           break; // nothing to backtrack
         }
+      }
+    }
+  }
+
+  // Fallback pass: try to place any remaining demand in any free slot with any available teacher
+  const leftovers = demands.filter(d => d.remaining > 0);
+  if (leftovers.length > 0) {
+    for (const demand of leftovers) {
+      outer_leftover: while (demand.remaining > 0) {
+        let placed = false;
+        for (const day of workingDays) {
+          const cBusyDay = classBusy.get(demand.sectionId)?.get(day);
+          for (let slot = 0; slot < slotsPerDay; slot++) {
+            if (cBusyDay && cBusyDay.has(slot)) continue;
+            for (const tid of demand.teachers) {
+              const subjMap = teacherSubjectRemaining.get(tid);
+              if (!subjMap) continue;
+              const secMap = subjMap.get(demand.subjectId);
+              const left = secMap?.get(demand.sectionId) || 0;
+              if (left <= 0) continue;
+              if (!isTeacherAvailable(tid, day, slot)) continue;
+              // also ensure teacher not busy at that time
+              const tBusyDay = teacherBusy.get(tid)?.get(day);
+              if (tBusyDay && tBusyDay.has(slot)) continue;
+
+              // place without heavy penalties (lenient)
+              assignments.push({ day, slot, sectionId: demand.sectionId, classId: demand.classId, subjectId: demand.subjectId, teacherId: tid });
+              markBusy(classBusy, demand.sectionId, day, slot);
+              markBusy(teacherBusy, tid, day, slot);
+              incTeacherDayLoad(tid, day, 1);
+              incClassDaySubject(demand.sectionId, day, demand.subjectId, 1);
+              secMap.set(demand.sectionId, left - 1);
+              demand.remaining--;
+              placed = true;
+              break;
+            }
+            if (placed) continue outer_leftover;
+          }
+        }
+        // no place found for this unit -> break to avoid infinite loop
+        if (!placed) break;
       }
     }
   }
