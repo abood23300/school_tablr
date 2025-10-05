@@ -2803,44 +2803,79 @@ function renderStats() {
       <p><strong>إجمالي الحصص (فعلي):</strong> ${actualTotal}</p>`;
     
     // عرض مربعات الحصص غير الموزعة
-    if (remaining > 0) {
+    // نجمع كل المواد/الشعب للمعلم من المخطط + الحصص الزائدة غير المخططة
+    const allCombinations = new Map(); // key: "secId|subId", value: { secId, subId, planned, actual }
+    
+    // أولاً: نضيف المخططة
+    Object.entries(p?.plannedBySectionSubject || {}).forEach(([secId, subjMap]) => {
+      Object.entries(subjMap).forEach(([subId, cntPlanned]) => {
+        const key = `${secId}|${subId}`;
+        allCombinations.set(key, {
+          secId,
+          subId,
+          planned: cntPlanned || 0,
+          actual: (detailActual[secId]?.[subId]) || 0
+        });
+      });
+    });
+    
+    // ثانياً: نضيف أي حصص فعلية غير مخططة (تم إضافتها يدوياً بالسحب)
+    Object.entries(detailActual).forEach(([secId, subjMap]) => {
+      Object.entries(subjMap).forEach(([subId, cntActual]) => {
+        const key = `${secId}|${subId}`;
+        if (!allCombinations.has(key)) {
+          allCombinations.set(key, {
+            secId,
+            subId,
+            planned: 0,
+            actual: cntActual || 0
+          });
+        }
+      });
+    });
+    
+    // نحسب إجمالي المتبقي الفعلي
+    let totalRemaining = 0;
+    allCombinations.forEach(combo => {
+      const delta = combo.planned - combo.actual;
+      if (delta > 0) totalRemaining += delta;
+    });
+    
+    if (totalRemaining > 0) {
       html += `<div style="margin: 10px 0;">
-        <p style="margin: 5px 0; font-weight: bold; color: #f59e0b;">⚠️ حصص غير موزعة: ${remaining}</p>
+        <p style="margin: 5px 0; font-weight: bold; color: #f59e0b;">⚠️ حصص غير موزعة: ${totalRemaining}</p>
         <div class="unassigned-boxes" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px;">`;
       
-      // إنشاء مربع لكل حصة غير موزعة حسب المادة والشعبة
-      Object.entries(p?.plannedBySectionSubject || {}).forEach(([secId, subjMap]) => {
-        Object.entries(subjMap).forEach(([subId, cntPlanned]) => {
-          const cntActual = (detailActual[secId]?.[subId]) || 0;
-          const delta = cntPlanned - cntActual;
-          if (delta > 0) {
-            const secName = classSectionName.get(secId) || secId;
-            const subName = subjectName.get(subId) || subId;
-            for (let i = 0; i < delta; i++) {
-              html += `<div class="unassigned-lesson-box" draggable="true" 
-                data-teacher-id="${t.id}" 
-                data-subject-id="${subId}" 
-                data-section-id="${secId}"
-                data-source="unassigned"
-                style="
-                  background: #fff;
-                  border: 2px solid #f59e0b;
-                  border-radius: 6px;
-                  padding: 8px 12px;
-                  cursor: grab;
-                  font-size: 12px;
-                  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                  transition: all 0.2s;
-                  min-width: 120px;
-                  text-align: center;"
-                onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(245,158,11,0.3)';"
-                onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.1)';">
-                <div style="font-weight: bold; color: #1f2937;">${subName}</div>
-                <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">${secName}</div>
-              </div>`;
-            }
+      // إنشاء مربع لكل حصة غير موزعة
+      allCombinations.forEach(combo => {
+        const delta = combo.planned - combo.actual;
+        if (delta > 0) {
+          const secName = classSectionName.get(combo.secId) || combo.secId;
+          const subName = subjectName.get(combo.subId) || combo.subId;
+          for (let i = 0; i < delta; i++) {
+            html += `<div class="unassigned-lesson-box" draggable="true" 
+              data-teacher-id="${t.id}" 
+              data-subject-id="${combo.subId}" 
+              data-section-id="${combo.secId}"
+              data-source="unassigned"
+              style="
+                background: #fff;
+                border: 2px solid #f59e0b;
+                border-radius: 6px;
+                padding: 8px 12px;
+                cursor: grab;
+                font-size: 12px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                transition: all 0.2s;
+                min-width: 120px;
+                text-align: center;"
+              onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 4px 12px rgba(245,158,11,0.3)';"
+              onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 2px 4px rgba(0,0,0,0.1)';">
+              <div style="font-weight: bold; color: #1f2937;">${subName}</div>
+              <div style="font-size: 10px; color: #6b7280; margin-top: 2px;">${secName}</div>
+            </div>`;
           }
-        });
+        }
       });
       
       html += `</div></div>`;
