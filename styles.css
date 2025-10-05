@@ -138,5 +138,115 @@ input[type="text"], input[type="number"] { width:100%; padding:10px; border:1px 
 #teacherForbiddenDaySlots th, #teacherForbiddenDaySlots td { border:1px solid #e5e7eb; padding:6px; text-align:center; }
 #teacherForbiddenDaySlots thead th { background:#f9fafb; font-weight:600; }
 
-/* Warning styles */
-.warning { background:#fef3c7; border:1px solid #f59e0b; color:#92400e; padding:8px; border-radius:6px; margin-bottom:12px; }
+/* ========== Unassigned Lessons & Drag-Drop ========== */
+.unassigned-lessons-container {
+  margin: 20px 0;
+  padding: 15px;
+  background: #fff8dc;
+  border: 2px dashed #ff9800;
+  border-radius: 8px;
+}
+
+.unassigned-lessons-container h3 {
+  margin: 0 0 15px 0;
+  color: #d32f2f;
+  font-size: 1.1em;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.unassigned-count-badge {
+  background: #d32f2f;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.9em;
+}
+
+.unassigned-lessons-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.unassigned-lesson-card {
+  background: #fff;
+  border: 2px solid #ff9800;
+  border-radius: 6px;
+  padding: 10px;
+  cursor: move;
+  transition: all 0.2s;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  user-select: none;
+}
+
+.unassigned-lesson-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+  border-color: #f57c00;
+  background: #fffbf0;
+}
+
+.unassigned-lesson-card.dragging {
+  opacity: 0.4;
+  transform: rotate(2deg);
+}
+
+.unassigned-lesson-subject {
+  font-weight: bold;
+  color: #1976d2;
+  margin-bottom: 4px;
+  font-size: 0.95em;
+}
+
+.unassigned-lesson-teacher {
+  color: #666;
+  font-size: 0.85em;
+  margin-bottom: 2px;
+}
+
+.unassigned-lesson-section {
+  color: #888;
+  font-size: 0.8em;
+}
+
+/* Drag and Drop States for Table Cells */
+.timetable td {
+  position: relative;
+  transition: all 0.2s;
+}
+
+.timetable td.drag-over-empty {
+  background: #e3f2fd !important;
+  border: 2px dashed #2196f3 !important;
+  box-shadow: inset 0 0 8px rgba(33, 150, 243, 0.3);
+}
+
+.timetable td.drag-over-replace {
+  background: #fff3e0 !important;
+  border: 2px dashed #ff9800 !important;
+  box-shadow: inset 0 0 8px rgba(255, 152, 0, 0.3);
+}
+
+.lesson-cell-content {
+  cursor: move;
+  user-select: none;
+  padding: 2px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+
+.lesson-cell-content:hover {
+  background: rgba(33, 150, 243, 0.05);
+}
+
+.lesson-cell-content.dragging {
+  opacity: 0.3;
+}
+
+/* Empty cell indicator */
+.timetable td.empty-cell {
+  background: #fafafa;
+  color: #ccc;
+}

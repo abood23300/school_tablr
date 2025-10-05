@@ -1973,6 +1973,281 @@ function generateTimetable() {
   return assignments;
 }
 
+// Helper: Render unassigned lessons as draggable cards
+function renderUnassignedLessons(unassigned) {
+  const container = document.getElementById('timetableContainer');
+  
+  const unassignedContainer = document.createElement('div');
+  unassignedContainer.className = 'unassigned-lessons-container';
+  unassignedContainer.innerHTML = '<h3>الحصص غير الموزعة (اسحب وأفلت في الجدول)</h3>';
+  
+  const grid = document.createElement('div');
+  grid.className = 'unassigned-lessons-grid';
+  
+  unassigned.forEach((lesson, index) => {
+    // Create multiple cards if count > 1
+    for (let i = 0; i < lesson.count; i++) {
+      const card = document.createElement('div');
+      card.className = 'unassigned-lesson-card';
+      card.draggable = true;
+      card.dataset.teacherId = lesson.teacherId;
+      card.dataset.subjectId = lesson.subjectId;
+      card.dataset.sectionId = lesson.sectionId;
+      card.dataset.source = 'unassigned';
+      
+      card.innerHTML = `
+        <div class="card-subject">${lesson.subjectName}</div>
+        <div class="card-teacher">${lesson.teacherName}</div>
+        <div class="card-section">${lesson.sectionName}</div>
+      `;
+      
+      card.addEventListener('dragstart', handleDragStart);
+      card.addEventListener('dragend', handleDragEnd);
+      
+      grid.appendChild(card);
+    }
+  });
+  
+  unassignedContainer.appendChild(grid);
+  container.insertBefore(unassignedContainer, container.firstChild);
+}
+
+// Drag-and-drop event handlers
+let draggedElement = null;
+let draggedData = null;
+
+function handleDragStart(e) {
+  draggedElement = e.target;
+  draggedElement.classList.add('dragging');
+  
+  draggedData = {
+    teacherId: e.target.dataset.teacherId,
+    subjectId: e.target.dataset.subjectId,
+    sectionId: e.target.dataset.sectionId,
+    source: e.target.dataset.source,
+    day: e.target.dataset.day,
+    slot: e.target.dataset.slot
+  };
+  
+  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/html', e.target.innerHTML);
+}
+
+function handleDragEnd(e) {
+  e.target.classList.remove('dragging');
+  // Remove all drop-over visual feedback
+  document.querySelectorAll('.drag-over-empty, .drag-over-replace').forEach(el => {
+    el.classList.remove('drag-over-empty', 'drag-over-replace');
+  });
+}
+
+function handleDragOver(e) {
+  if (e.preventDefault) {
+    e.preventDefault();
+  }
+  e.dataTransfer.dropEffect = 'move';
+  
+  const cell = e.currentTarget;
+  const hasContent = cell.querySelector('.lesson-cell-content');
+  
+  // Visual feedback
+  if (hasContent) {
+    cell.classList.add('drag-over-replace');
+    cell.classList.remove('drag-over-empty');
+  } else {
+    cell.classList.add('drag-over-empty');
+    cell.classList.remove('drag-over-replace');
+  }
+  
+  return false;
+}
+
+function handleDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over-empty', 'drag-over-replace');
+}
+
+function handleDrop(e) {
+  if (e.stopPropagation) {
+    e.stopPropagation();
+  }
+  e.preventDefault();
+  
+  const cell = e.currentTarget;
+  cell.classList.remove('drag-over-empty', 'drag-over-replace');
+  
+  if (!draggedData) return false;
+  
+  const targetDay = cell.dataset.day;
+  const targetSlot = parseInt(cell.dataset.slot);
+  const targetSectionId = cell.dataset.sectionId;
+  
+  // Get current assignments
+  const st = loadState();
+  let assignments = getTimetable() || [];
+  
+  // Check if dropping on the same cell (no-op)
+  if (draggedData.source === 'table' && 
+      draggedData.day === targetDay && 
+      draggedData.slot === targetSlot &&
+      draggedData.sectionId === targetSectionId) {
+    return false;
+  }
+  
+  // Check if target cell has existing assignment
+  const existingIndex = assignments.findIndex(a => 
+    a.day === targetDay && a.slot === targetSlot && a.sectionId === targetSectionId
+  );
+  
+  // Scenario 1: From unassigned card to empty cell
+  if (draggedData.source === 'unassigned' && existingIndex === -1) {
+    assignments.push({
+      teacherId: draggedData.teacherId,
+      subjectId: draggedData.subjectId,
+      sectionId: targetSectionId,
+      day: targetDay,
+      slot: targetSlot
+    });
+    draggedElement.remove();
+  }
+  // Scenario 2: From unassigned card to occupied cell (swap)
+  else if (draggedData.source === 'unassigned' && existingIndex !== -1) {
+    const oldAssignment = assignments[existingIndex];
+    assignments[existingIndex] = {
+      teacherId: draggedData.teacherId,
+      subjectId: draggedData.subjectId,
+      sectionId: targetSectionId,
+      day: targetDay,
+      slot: targetSlot
+    };
+    draggedElement.remove();
+    
+    // Add old assignment back to unassigned
+    const unassignedContainer = document.querySelector('.unassigned-lessons-grid');
+    if (unassignedContainer) {
+      const subjects = new Map((st.subjects||[]).map(s => [s.id, s.name]));
+      const teachers = new Map((st.teachers||[]).map(t => [t.id, t.name]));
+      const classSectionMap = new Map();
+      (st.classes || []).forEach(cls => {
+        if (cls.sections && cls.sections.length) {
+          cls.sections.forEach(sec => classSectionMap.set(sec.id, sec.name));
+        } else {
+          classSectionMap.set(cls.id, cls.name);
+        }
+      });
+      
+      const card = document.createElement('div');
+      card.className = 'unassigned-lesson-card';
+      card.draggable = true;
+      card.dataset.teacherId = oldAssignment.teacherId;
+      card.dataset.subjectId = oldAssignment.subjectId;
+      card.dataset.sectionId = oldAssignment.sectionId;
+      card.dataset.source = 'unassigned';
+      
+      card.innerHTML = `
+        <div class="card-subject">${subjects.get(oldAssignment.subjectId) || ''}</div>
+        <div class="card-teacher">${teachers.get(oldAssignment.teacherId) || ''}</div>
+        <div class="card-section">${classSectionMap.get(oldAssignment.sectionId) || ''}</div>
+      `;
+      
+      card.addEventListener('dragstart', handleDragStart);
+      card.addEventListener('dragend', handleDragEnd);
+      
+      unassignedContainer.appendChild(card);
+    }
+  }
+  // Scenario 3: From table cell to another cell (move or swap)
+  else if (draggedData.source === 'table') {
+    const sourceIndex = assignments.findIndex(a =>
+      a.day === draggedData.day && a.slot === draggedData.slot && a.sectionId === draggedData.sectionId
+    );
+    
+    if (sourceIndex !== -1) {
+      if (existingIndex === -1) {
+        // Move to empty cell
+        assignments[sourceIndex].day = targetDay;
+        assignments[sourceIndex].slot = targetSlot;
+        assignments[sourceIndex].sectionId = targetSectionId;
+      } else {
+        // Swap with existing cell
+        const temp = { ...assignments[existingIndex] };
+        assignments[existingIndex] = {
+          ...assignments[sourceIndex],
+          day: targetDay,
+          slot: targetSlot,
+          sectionId: targetSectionId
+        };
+        assignments[sourceIndex] = {
+          ...temp,
+          day: draggedData.day,
+          slot: draggedData.slot,
+          sectionId: draggedData.sectionId
+        };
+      }
+    }
+  }
+  
+  // Save and re-render
+  setTimetable(assignments);
+  renderTimetableByClass(assignments);
+  renderStats();
+  
+  return false;
+}
+
+// Helper: Calculate unassigned lessons from teacher remaining allocations
+function calculateUnassignedLessons(state, assignments) {
+  const unassigned = [];
+  const teachers = state.teachers || [];
+  const subjects = new Map((state.subjects || []).map(s => [s.id, s]));
+  const classSectionMap = new Map();
+  
+  // Build section map
+  (state.classes || []).forEach(cls => {
+    if (cls.sections && cls.sections.length) {
+      cls.sections.forEach(sec => classSectionMap.set(sec.id, { classId: cls.id, className: cls.name, ...sec }));
+    } else {
+      classSectionMap.set(cls.id, { classId: cls.id, className: cls.name, id: cls.id, name: cls.name });
+    }
+  });
+  
+  // Count assigned lessons per teacher/subject/section
+  const assignedCount = new Map();
+  assignments.forEach(a => {
+    const key = `${a.teacherId}|${a.subjectId}|${a.sectionId}`;
+    assignedCount.set(key, (assignedCount.get(key) || 0) + 1);
+  });
+  
+  // Calculate unassigned from teachers' allocations
+  teachers.forEach(teacher => {
+    (teacher.subjects || []).forEach(ts => {
+      (ts.sections || []).forEach(sectionId => {
+        const key = `${teacher.id}|${ts.subjectId}|${sectionId}`;
+        const planned = ts.periodsPerWeek || 0;
+        const assigned = assignedCount.get(key) || 0;
+        const remaining = planned - assigned;
+        
+        if (remaining > 0) {
+          const subject = subjects.get(ts.subjectId);
+          const section = classSectionMap.get(sectionId);
+          if (subject && section) {
+            unassigned.push({
+              teacherId: teacher.id,
+              teacherName: teacher.name,
+              subjectId: ts.subjectId,
+              subjectName: subject.name,
+              sectionId: sectionId,
+              sectionName: section.name,
+              count: remaining
+            });
+          }
+        }
+      });
+    });
+  });
+  
+  return unassigned;
+}
+
 function renderTimetableByClass(assignments) {
   const st = loadState();
   const classes = st.classes || [];
@@ -1983,6 +2258,12 @@ function renderTimetableByClass(assignments) {
   const slotTimes = st.school?.slotTimes || [];
   const container = document.getElementById('timetableContainer');
   container.innerHTML = '';
+  
+  // Calculate and render unassigned lessons
+  const unassigned = calculateUnassignedLessons(st, assignments);
+  if (unassigned.length > 0) {
+    renderUnassignedLessons(unassigned);
+  }
 
   classes.forEach(cls => {
     const sections = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
@@ -2003,9 +2284,33 @@ function renderTimetableByClass(assignments) {
       tr.innerHTML = `<th>${day}</th>`;
       for (let slot=0; slot<slotsPerDay; slot++) {
         const cell = document.createElement('td');
-          const a = assignments.find(x => x.sectionId === sec.id && x.day === day && x.slot === slot);
+        cell.dataset.day = day;
+        cell.dataset.slot = slot;
+        cell.dataset.sectionId = sec.id;
+        
+        // Add drop handlers to all cells
+        cell.addEventListener('dragover', handleDragOver);
+        cell.addEventListener('dragleave', handleDragLeave);
+        cell.addEventListener('drop', handleDrop);
+        
+        const a = assignments.find(x => x.sectionId === sec.id && x.day === day && x.slot === slot);
         if (a) {
-          cell.innerHTML = `<div>${subjects.get(a.subjectId)||''}</div><div class="hint">${teachers.get(a.teacherId)||''}</div>`;
+          // Wrap content in draggable div
+          const wrapper = document.createElement('div');
+          wrapper.className = 'lesson-cell-content';
+          wrapper.draggable = true;
+          wrapper.dataset.teacherId = a.teacherId;
+          wrapper.dataset.subjectId = a.subjectId;
+          wrapper.dataset.sectionId = a.sectionId;
+          wrapper.dataset.day = day;
+          wrapper.dataset.slot = slot;
+          wrapper.dataset.source = 'table';
+          wrapper.innerHTML = `<div>${subjects.get(a.subjectId)||''}</div><div class="hint">${teachers.get(a.teacherId)||''}</div>`;
+          
+          wrapper.addEventListener('dragstart', handleDragStart);
+          wrapper.addEventListener('dragend', handleDragEnd);
+          
+          cell.appendChild(wrapper);
         } else {
           cell.textContent = '—';
         }
@@ -2158,6 +2463,45 @@ document.addEventListener('DOMContentLoaded', () => {
   const genBtn = document.getElementById('generateBtn');
   const container = document.getElementById('timetableContainer');
   let CURRENT_VIEW = 'by-class';
+  
+  // Global drop handler: if dragging from table and dropping outside, return to unassigned
+  document.body.addEventListener('dragover', (e) => {
+    // Allow dropping on body
+    const target = e.target;
+    if (!target.closest('td[data-day]')) {
+      e.preventDefault();
+    }
+  });
+  
+  document.body.addEventListener('drop', (e) => {
+    const target = e.target;
+    // If dropping outside table cells and source is table
+    if (!target.closest('td[data-day]') && draggedData && draggedData.source === 'table') {
+      e.preventDefault();
+      e.stopPropagation();
+      
+      const st = loadState();
+      let assignments = getTimetable() || [];
+      
+      // Remove assignment from table
+      const sourceIndex = assignments.findIndex(a =>
+        a.day === draggedData.day && 
+        a.slot === draggedData.slot && 
+        a.sectionId === draggedData.sectionId
+      );
+      
+      if (sourceIndex !== -1) {
+        const removedAssignment = assignments[sourceIndex];
+        assignments.splice(sourceIndex, 1);
+        
+        // Save and re-render
+        setTimetable(assignments);
+        renderTimetableByClass(assignments);
+        renderStats();
+      }
+    }
+  });
+  
   genBtn?.addEventListener('click', () => {
     const assignments = generateTimetable();
     if (assignments.length) {
