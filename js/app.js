@@ -2750,6 +2750,137 @@ async function captureElementAsPNG(container) {
   return new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
 }
 
+// Export stats to Excel/Word
+function exportStatsToExcel() {
+  const statsContainer = document.getElementById('statsContainer');
+  if (!statsContainer || !statsContainer.innerHTML.trim()) {
+    alert('يرجى توليد الإحصائيات أولاً');
+    return;
+  }
+  
+  const st = loadState();
+  const schoolName = st.school?.name || 'المدرسة';
+  const timestamp = new Date().toLocaleDateString('ar-SA');
+  
+  // Create HTML for Excel
+  let html = `
+    <html xmlns:x="urn:schemas-microsoft-com:office:excel" dir="rtl">
+    <head>
+      <meta charset="UTF-8">
+      <style>
+        body { font-family: 'Arial', 'Tahoma', sans-serif; direction: rtl; }
+        h2, h3 { text-align: center; color: #2b6cb0; }
+        .teacher-stat { border: 2px solid #e5e7eb; padding: 15px; margin: 20px 0; border-radius: 8px; page-break-inside: avoid; }
+        .teacher-stat h4 { color: #1a202c; margin-top: 0; background: #eef2ff; padding: 10px; border-radius: 4px; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+        th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: center; }
+        th { background-color: #f3f4f6; font-weight: bold; }
+        ul { margin: 10px 0; padding-right: 20px; }
+        li { margin: 5px 0; }
+        .hint { color: #6b7280; font-size: 0.9em; }
+        strong { color: #2b6cb0; }
+        .unassigned-boxes { display: none; } /* Hide drag boxes in export */
+      </style>
+    </head>
+    <body>
+      <h2>${schoolName}</h2>
+      <h3>إحصائيات توزيع الحصص</h3>
+      <p style="text-align: center; color: #6b7280;">التاريخ: ${timestamp}</p>
+      <hr>
+  `;
+  
+  // Clone stats content and remove interactive elements
+  const clone = statsContainer.cloneNode(true);
+  // Remove drag boxes and buttons
+  clone.querySelectorAll('.unassigned-boxes, .unassigned-lesson-box, button, .floating-unassigned-box').forEach(el => el.remove());
+  
+  html += clone.innerHTML;
+  html += `
+      <hr>
+      <p style="text-align: center; color: #6b7280; font-size: 0.9em;">
+        تم إنشاء هذا التقرير بواسطة نظام إدارة الجداول المدرسية
+      </p>
+    </body>
+    </html>
+  `;
+  
+  // Create blob and download
+  const blob = new Blob(['\ufeff' + html], { type: 'application/vnd.ms-excel;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `إحصائيات_${schoolName}_${new Date().toISOString().split('T')[0]}.xls`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportStatsToWord() {
+  const statsContainer = document.getElementById('statsContainer');
+  if (!statsContainer || !statsContainer.innerHTML.trim()) {
+    alert('يرجى توليد الإحصائيات أولاً');
+    return;
+  }
+  
+  const st = loadState();
+  const schoolName = st.school?.name || 'المدرسة';
+  const timestamp = new Date().toLocaleDateString('ar-SA');
+  
+  // Create HTML for Word
+  let html = `
+    <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40' dir='rtl'>
+    <head>
+      <meta charset='UTF-8'>
+      <style>
+        @page { size: A4; margin: 2cm; }
+        body { font-family: 'Arial', 'Tahoma', sans-serif; direction: rtl; font-size: 11pt; }
+        h2, h3 { text-align: center; color: #2b6cb0; }
+        h2 { font-size: 18pt; margin-bottom: 10pt; }
+        h3 { font-size: 14pt; margin-bottom: 15pt; }
+        .teacher-stat { border: 2px solid #e5e7eb; padding: 15px; margin: 20px 0; border-radius: 8px; page-break-inside: avoid; }
+        .teacher-stat h4 { color: #1a202c; margin-top: 0; background: #eef2ff; padding: 10px; border-radius: 4px; font-size: 12pt; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+        th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: center; font-size: 10pt; }
+        th { background-color: #f3f4f6; font-weight: bold; }
+        ul { margin: 10px 0; padding-right: 20px; }
+        li { margin: 5px 0; font-size: 10pt; }
+        .hint { color: #6b7280; font-size: 9pt; }
+        strong { color: #2b6cb0; }
+        p { font-size: 10pt; }
+        .unassigned-boxes { display: none; } /* Hide drag boxes in export */
+      </style>
+    </head>
+    <body>
+      <h2>${schoolName}</h2>
+      <h3>إحصائيات توزيع الحصص الدراسية</h3>
+      <p style="text-align: center; color: #6b7280;">التاريخ: ${timestamp}</p>
+      <hr>
+  `;
+  
+  // Clone stats content and remove interactive elements
+  const clone = statsContainer.cloneNode(true);
+  // Remove drag boxes and buttons
+  clone.querySelectorAll('.unassigned-boxes, .unassigned-lesson-box, button, .floating-unassigned-box').forEach(el => el.remove());
+  
+  html += clone.innerHTML;
+  html += `
+      <hr>
+      <p style="text-align: center; color: #6b7280; font-size: 9pt; margin-top: 30pt;">
+        تم إنشاء هذا التقرير بواسطة نظام إدارة الجداول المدرسية - ${timestamp}
+      </p>
+    </body>
+    </html>
+  `;
+  
+  // Create blob and download
+  const blob = new Blob(['\ufeff' + html], { type: 'application/msword;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `إحصائيات_${schoolName}_${new Date().toISOString().split('T')[0]}.doc`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 // ---------- Stats rendering ----------
 function renderStats() {
   const assignments = getTimetable();
@@ -3095,6 +3226,21 @@ function renderStats() {
       <p><strong>الأيام التي لديه دروس:</strong> ${Array.from(s.hasLessonsOn).join('، ') || 'لا توجد'}</p>
     </div>`;
   });
+  
+  // إضافة أزرار التصدير في النهاية
+  html += `
+    <div style="text-align: center; margin: 30px 0; padding: 20px; background: #f9fafb; border-radius: 8px; border: 2px solid #e5e7eb;">
+      <h4 style="color: #2b6cb0; margin-bottom: 15px;">📊 تصدير الإحصائيات</h4>
+      <button id="exportStatsWord" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; margin: 5px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: all 0.3s;">
+        📄 تصدير Word
+      </button>
+      <button id="exportStatsExcel" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); color: white; padding: 12px 30px; border: none; border-radius: 6px; font-size: 16px; cursor: pointer; margin: 5px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); transition: all 0.3s;">
+        📊 تصدير Excel
+      </button>
+      <p style="color: #6b7280; font-size: 14px; margin-top: 10px;">سيتم تنزيل ملف يحتوي على جميع الإحصائيات</p>
+    </div>
+  `;
+  
   statsContainer.innerHTML = html;
   
   // إضافة event listeners للمربعات القابلة للسحب
@@ -3102,4 +3248,32 @@ function renderStats() {
     box.addEventListener('dragstart', handleDragStart);
     box.addEventListener('dragend', handleDragEnd);
   });
+  
+  // إضافة event listeners لأزرار التصدير
+  const exportWordBtn = document.getElementById('exportStatsWord');
+  const exportExcelBtn = document.getElementById('exportStatsExcel');
+  
+  if (exportWordBtn) {
+    exportWordBtn.addEventListener('click', exportStatsToWord);
+    exportWordBtn.addEventListener('mouseenter', function() {
+      this.style.transform = 'translateY(-2px)';
+      this.style.boxShadow = '0 6px 12px rgba(0,0,0,0.15)';
+    });
+    exportWordBtn.addEventListener('mouseleave', function() {
+      this.style.transform = 'translateY(0)';
+      this.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+    });
+  }
+  
+  if (exportExcelBtn) {
+    exportExcelBtn.addEventListener('click', exportStatsToExcel);
+    exportExcelBtn.addEventListener('mouseenter', function() {
+      this.style.transform = 'translateY(-2px)';
+      this.style.boxShadow = '0 6px 12px rgba(0,0,0,0.15)';
+    });
+    exportExcelBtn.addEventListener('mouseleave', function() {
+      this.style.transform = 'translateY(0)';
+      this.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
+    });
+  }
 }
