@@ -2102,6 +2102,15 @@ let draggedData = null;
 let copiedLessonData = null;
 let copiedIndicatorTimeout = null;
 
+// Smart font sizing for combined view cells
+function getSmartFontSize(text) {
+  const length = text.length;
+  if (length <= 12) return '14px';      // نص قصير: خط كبير
+  if (length <= 20) return '12px';      // نص متوسط: خط متوسط
+  if (length <= 30) return '10px';      // نص طويل: خط صغير
+  return '9px';                         // نص طويل جداً: خط صغير جداً
+}
+
 function handleDragStart(e) {
   draggedElement = e.target;
   draggedElement.classList.add('dragging');
@@ -2631,7 +2640,16 @@ function renderCombinedByClass(assignments) {
           const td = document.createElement('td');
           const a = assignments.find(x => x.sectionId === sec.id && x.day === day && x.slot === slot);
           if (a) {
-            td.innerHTML = `<div>${subjects.get(a.subjectId) || ''}</div><div class="hint">${teachers.get(a.teacherId) || ''}</div>`;
+            // دمج المادة والمدرس في سطر واحد لتوفير المساحة
+            const subjectName = subjects.get(a.subjectId) || '';
+            const teacherName = teachers.get(a.teacherId) || '';
+            const combinedText = `${subjectName} / ${teacherName}`;
+            
+            // تطبيق حجم خط ذكي بناءً على طول النص
+            const fontSize = getSmartFontSize(combinedText);
+            
+            td.innerHTML = `<div class="combined-cell" style="font-size: ${fontSize};">${combinedText}</div>`;
+            td.classList.add('compact-cell');
           } else {
             td.textContent = '—';
           }
@@ -2782,25 +2800,31 @@ function defaultPrintHeader(st) {
   return name;
 }
 
-// --- Print scaling helpers for combined view ---
+// --- Print scaling helpers for combined view (optimized for A3) ---
 let COMBINED_SCALE_APPLIED = false;
 function tryFitCombinedTableToA4() {
   const wrap = document.querySelector('#timetableContainer .table-scroll');
   const table = wrap?.querySelector('table.timetable');
   if (!wrap || !table) return;
+  
   // Make sure scroll holder doesn't constrain width at print
   wrap.style.overflow = 'visible';
-  // A4 landscape printable width approximation in pixels (at 96dpi ~ 1122px minus margins). We'll compute from page size when possible.
-  // Use container width as reference; if table is wider, scale it down.
-  const availableWidth = document.body.clientWidth; // approx printable area in CSS pixels
+  
+  // A3 landscape printable width approximation (at 96dpi ~ 1587px minus margins)
+  // A3 = 297mm × 420mm، في landscape mode العرض = 420mm ≈ 1587px
+  const availableWidth = 1550; // A3 landscape width minus margins (~37px margins)
   const tableWidth = table.getBoundingClientRect().width;
-  if (tableWidth > 0 && availableWidth > 0 && tableWidth > availableWidth) {
-    const scale = Math.max(0.6, (availableWidth - 12) / tableWidth);
+  
+  if (tableWidth > 0 && tableWidth > availableWidth) {
+    // Scale down only if necessary, with minimum scale of 0.7 for readability
+    const scale = Math.max(0.7, availableWidth / tableWidth);
     table.style.transformOrigin = 'right top';
     table.style.transform = `scale(${scale})`;
     COMBINED_SCALE_APPLIED = true;
+    console.log(`📏 تم تصغير الجدول إلى ${(scale * 100).toFixed(1)}% لملائمة A3`);
   } else {
     COMBINED_SCALE_APPLIED = false;
+    console.log('✅ الجدول يناسب A3 بدون تصغير');
   }
 }
 function unscaleCombinedTable() {
