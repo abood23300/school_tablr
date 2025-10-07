@@ -465,3 +465,160 @@ input[type="text"], input[type="number"] { width:100%; padding:10px; border:1px 
     grid-template-columns: 1fr;
   }
 }
+
+/* ====== Copy-Paste Functionality Styles ====== */
+
+/* Copy button on lessons */
+.copy-lesson-btn {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  background: #3b82f6;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+  transition: all 0.2s ease;
+  z-index: 10;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+
+.lesson-cell-content {
+  position: relative;
+}
+
+.lesson-cell-content:hover .copy-lesson-btn {
+  opacity: 1;
+}
+
+.copy-lesson-btn:hover {
+  background: #2563eb;
+  transform: scale(1.1);
+}
+
+.copy-lesson-btn:active {
+  transform: scale(0.95);
+}
+
+/* Copied lesson indicator */
+.copied-lesson {
+  outline: 3px solid #22c55e;
+  outline-offset: 2px;
+  animation: copiedPulse 0.6s ease-in-out;
+}
+
+@keyframes copiedPulse {
+  0%, 100% { outline-color: #22c55e; }
+  50% { outline-color: #86efac; }
+}
+
+/* Empty cell styling */
+.empty-cell {
+  cursor: default;
+  transition: all 0.2s ease;
+}
+
+.empty-cell-indicator {
+  color: #d1d5db;
+  font-size: 18px;
+}
+
+/* Paste target highlighting */
+.paste-target {
+  background: #fef3c7 !important;
+  cursor: pointer !important;
+  animation: pulseGlow 1.5s ease-in-out infinite;
+  border: 2px dashed #fbbf24 !important;
+}
+
+@keyframes pulseGlow {
+  0%, 100% { 
+    background: #fef3c7 !important;
+    border-color: #fbbf24 !important;
+  }
+  50% { 
+    background: #fde68a !important;
+    border-color: #f59e0b !important;
+  }
+}
+
+.paste-target:hover {
+  background: #fde047 !important;
+  transform: scale(1.02);
+}
+
+.paste-target .empty-cell-indicator {
+  color: #92400e;
+  font-weight: bold;
+}
+
+/* Paste animation */
+.paste-animation {
+  animation: pasteSuccess 0.6s ease-out;
+}
+
+@keyframes pasteSuccess {
+  0% {
+    transform: scale(1);
+    background: #fef3c7;
+  }
+  50% {
+    transform: scale(1.05);
+    background: #86efac;
+  }
+  100% {
+    transform: scale(1);
+    background: transparent;
+  }
+}
+
+/* Copy-Paste notification */
+.copy-paste-notification {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  background: white;
+  padding: 12px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  font-weight: 600;
+  font-size: 14px;
+  opacity: 0;
+  transform: translateX(100px);
+  transition: all 0.3s ease;
+  z-index: 9999;
+  max-width: 300px;
+  border-left: 4px solid #3b82f6;
+}
+
+.copy-paste-notification.success {
+  border-left-color: #22c55e;
+  color: #166534;
+}
+
+.copy-paste-notification.error {
+  border-left-color: #ef4444;
+  color: #991b1b;
+}
+
+.copy-paste-notification.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+/* Responsive adjustments for copy-paste */
+@media (max-width: 768px) {
+  .copy-paste-notification {
+    top: 60px;
+    right: 10px;
+    left: 10px;
+    max-width: calc(100% - 20px);
+  }
+  
+  .copy-lesson-btn {
+    opacity: 1; /* Always visible on mobile */
+  }
+}

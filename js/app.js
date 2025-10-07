@@ -2098,6 +2098,10 @@ function renderFloatingUnassignedBox() {
 let draggedElement = null;
 let draggedData = null;
 
+// Copy-Paste functionality
+let copiedLessonData = null;
+let copiedIndicatorTimeout = null;
+
 function handleDragStart(e) {
   draggedElement = e.target;
   draggedElement.classList.add('dragging');
@@ -2244,6 +2248,125 @@ function handleDrop(e) {
   return false;
 }
 
+// Copy-Paste functionality
+function copyLesson(assignment, element) {
+  copiedLessonData = {
+    teacherId: assignment.teacherId,
+    subjectId: assignment.subjectId,
+    sectionId: assignment.sectionId
+  };
+  
+  // Visual feedback
+  showCopyFeedback(element);
+  highlightEmptyCells();
+  
+  console.log('تم نسخ الدرس:', copiedLessonData);
+}
+
+function pasteLesson(targetCell, lessonData) {
+  if (!lessonData) return;
+  
+  const targetDay = targetCell.dataset.day;
+  const targetSlot = parseInt(targetCell.dataset.slot);
+  const targetSectionId = targetCell.dataset.sectionId;
+  
+  // Get current assignments
+  const st = loadState();
+  let assignments = getTimetable() || [];
+  
+  // Check if target cell is empty
+  const existingIndex = assignments.findIndex(a => 
+    a.day === targetDay && parseInt(a.slot) === targetSlot && a.sectionId === targetSectionId
+  );
+  
+  if (existingIndex !== -1) {
+    alert('لا يمكن اللصق! الخلية مشغولة بالفعل.');
+    return;
+  }
+  
+  // Add new assignment (نسخة جديدة من الدرس)
+  assignments.push({
+    teacherId: lessonData.teacherId,
+    subjectId: lessonData.subjectId,
+    sectionId: targetSectionId,
+    day: targetDay,
+    slot: targetSlot
+  });
+  
+  // Save and re-render
+  setTimetable(assignments);
+  renderTimetableByClass(assignments);
+  renderStats(); // تحديث الإحصائيات (سيزيد العدد الفعلي)
+  renderFloatingUnassignedBox();
+  
+  // Clear copied data and highlights
+  copiedLessonData = null;
+  removeEmptyCellsHighlight();
+  
+  // Show success message
+  showPasteFeedback(targetCell);
+  
+  console.log('تم لصق الدرس في:', targetDay, 'الحصة:', targetSlot + 1);
+}
+
+function showCopyFeedback(element) {
+  // Add visual indicator
+  element.classList.add('copied-lesson');
+  
+  // Clear previous timeout
+  if (copiedIndicatorTimeout) {
+    clearTimeout(copiedIndicatorTimeout);
+  }
+  
+  // Remove after 3 seconds
+  copiedIndicatorTimeout = setTimeout(() => {
+    document.querySelectorAll('.copied-lesson').forEach(el => {
+      el.classList.remove('copied-lesson');
+    });
+  }, 3000);
+  
+  // Show notification
+  showNotification('✅ تم نسخ الدرس! انقر على خلية فارغة للصقه', 'success');
+}
+
+function showPasteFeedback(cell) {
+  cell.classList.add('paste-animation');
+  setTimeout(() => {
+    cell.classList.remove('paste-animation');
+  }, 600);
+  
+  showNotification('✅ تم لصق الدرس بنجاح!', 'success');
+}
+
+function highlightEmptyCells() {
+  document.querySelectorAll('.empty-cell').forEach(cell => {
+    cell.classList.add('paste-target');
+  });
+}
+
+function removeEmptyCellsHighlight() {
+  document.querySelectorAll('.paste-target').forEach(cell => {
+    cell.classList.remove('paste-target');
+  });
+}
+
+function showNotification(message, type = 'info') {
+  // Create notification element
+  const notification = document.createElement('div');
+  notification.className = `copy-paste-notification ${type}`;
+  notification.textContent = message;
+  document.body.appendChild(notification);
+  
+  // Animate in
+  setTimeout(() => notification.classList.add('show'), 10);
+  
+  // Remove after 3 seconds
+  setTimeout(() => {
+    notification.classList.remove('show');
+    setTimeout(() => notification.remove(), 300);
+  }, 3000);
+}
+
 // Helper: Calculate unassigned lessons from teacher remaining allocations
 function calculateUnassignedLessons(state, assignments) {
   const unassigned = [];
@@ -2349,14 +2472,35 @@ function renderTimetableByClass(assignments) {
           wrapper.dataset.day = day;
           wrapper.dataset.slot = slot;
           wrapper.dataset.source = 'table';
+          
+          // Add copy button
+          const copyBtn = document.createElement('button');
+          copyBtn.className = 'copy-lesson-btn';
+          copyBtn.innerHTML = '📋';
+          copyBtn.title = 'نسخ الدرس';
+          copyBtn.onclick = (e) => {
+            e.stopPropagation();
+            copyLesson(a, wrapper);
+          };
+          
           wrapper.innerHTML = `<div>${subjects.get(a.subjectId)||''}</div><div class="hint">${teachers.get(a.teacherId)||''}</div>`;
+          wrapper.appendChild(copyBtn);
           
           wrapper.addEventListener('dragstart', handleDragStart);
           wrapper.addEventListener('dragend', handleDragEnd);
           
           cell.appendChild(wrapper);
         } else {
-          cell.textContent = '—';
+          // Empty cell - add paste functionality
+          cell.innerHTML = '<span class="empty-cell-indicator">—</span>';
+          cell.classList.add('empty-cell');
+          
+          // Add click handler for paste
+          cell.addEventListener('click', (e) => {
+            if (copiedLessonData && !cell.querySelector('.lesson-cell-content')) {
+              pasteLesson(cell, copiedLessonData);
+            }
+          });
         }
         tr.appendChild(cell);
       }
