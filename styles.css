@@ -679,3 +679,26 @@ input[type="text"], input[type="number"] { width:100%; padding:10px; border:1px 
     opacity: 1; /* Always visible on mobile */
   }
 }
+
+/* Version History Animations */
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes slideOut {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(100px);
+  }
+}
