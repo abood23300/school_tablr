@@ -1685,6 +1685,10 @@ function generateTimetable() {
     let score = 0;
     const category = getSlotCategory(slot);
     
+    // ===============================================
+    // التحسينات الجديدة لتوزيع المعلمين (2025-01-18)
+    // ===============================================
+    
     // 1. CRITICAL: Avoid repeating same subject in same day for same class
     const subjCount = classDaySubjectCount.get(demand.sectionId)?.get(day)?.get(demand.subjectId) || 0;
     if (subjCount > 0) score += 1000 * subjCount;
@@ -1710,15 +1714,63 @@ function generateTimetable() {
     score += projectedDiff * 90;
     if (tLoad < idealDaily) score -= Math.min(idealDaily - tLoad, 1) * 35;
 
-    // 5. Diversify sections taught by teacher in same day
+    // 5. CRITICAL NEW: تجنب 3+ دروس في نفس اليوم لنفس الصف للمعلم
+    // هذا يمنع المعلم من تدريس نفس الصف 3 مرات أو أكثر في يوم واحد
     const sectionRepeatCount = teacherDaySectionCount.get(tid)?.get(day)?.get(demand.sectionId) || 0;
-    if (sectionRepeatCount > 0) {
-      score += 250 * (sectionRepeatCount + 1);
+    if (sectionRepeatCount >= 2) {
+      // عقوبة قوية جداً: 1500 نقطة للدرس الثالث، 3000 للرابع، إلخ
+      score += 1500 * Math.pow(sectionRepeatCount - 1, 1.5);
+    } else if (sectionRepeatCount === 1) {
+      // عقوبة متوسطة للدرس الثاني في نفس اليوم
+      score += 400;
     } else {
+      // مكافأة لتنويع الصفوف
       score -= 10;
     }
 
-    // 6. Balance slot categories (early/mid/late)
+    // 6. HIGH NEW: عقوبة شديدة للدروس المتتالية لنفس المعلم في نفس الصف
+    // المعلمون لا يحبون تدريس نفس الصف في حصص متتالية
+    const tBusyDay = teacherBusy.get(tid)?.get(day);
+    if (tBusyDay) {
+      // فحص الحصة السابقة
+      if (tBusyDay.has(slot - 1)) {
+        const prevAssignments = assignmentsBySlot.get(`${day}-${slot-1}`) || [];
+        const prevInSameSection = prevAssignments.some(a => 
+          a.teacherId === tid && a.sectionId === demand.sectionId
+        );
+        if (prevInSameSection) {
+          // عقوبة عالية جداً: 800 نقطة
+          score += 800;
+        } else {
+          // عقوبة أقل إذا كان الصف مختلف (ولكن لا يزال متتالي)
+          score += 150;
+        }
+      }
+      
+      // فحص الحصة التالية
+      if (tBusyDay.has(slot + 1)) {
+        const nextAssignments = assignmentsBySlot.get(`${day}-${slot+1}`) || [];
+        const nextInSameSection = nextAssignments.some(a => 
+          a.teacherId === tid && a.sectionId === demand.sectionId
+        );
+        if (nextInSameSection) {
+          // عقوبة عالية جداً: 800 نقطة
+          score += 800;
+        } else {
+          // عقوبة أقل إذا كان الصف مختلف
+          score += 150;
+        }
+      }
+      
+      // مكافأة إذا كان هناك فجوة (راحة) قبل أو بعد
+      const hasGapBefore = slot > 0 && !tBusyDay.has(slot - 1);
+      const hasGapAfter = slot < slotsPerDay - 1 && !tBusyDay.has(slot + 1);
+      if (hasGapBefore || hasGapAfter) {
+        score -= 30;
+      }
+    }
+
+    // 7. Balance slot categories (early/mid/late)
     const catMap = teacherCategoryLoad.get(tid);
     const catCount = catMap?.get(category) || 0;
     const idealCat = teacherIdealCategoryLoad.get(tid)?.get(category) ?? ((teacherTotalLoad.get(tid) || 0) / Math.max(1, uniqueSlotCategories.length));
@@ -1726,14 +1778,54 @@ function generateTimetable() {
     score += catDiff * 60;
     if (catCount < idealCat) score -= Math.min(idealCat - catCount, 1) * 15;
 
-    // 7. Teacher breaks
-    const tBusyDay = teacherBusy.get(tid)?.get(day);
-    if (tBusyDay && (tBusyDay.has(slot-1) || tBusyDay.has(slot+1))) score += 10;
+    // 8. MEDIUM NEW: عقوبة خاصة للحصة السادسة (آخر حصة)
+    // المعلمون لا يفضلون الحصة الأخيرة، نوزعها بالتساوي
+    if (slot === slotsPerDay - 1) {
+      // احسب كم درس للمعلم في الحصة الأخيرة حالياً
+      let lastSlotCount = 0;
+      workingDays.forEach(d => {
+        if (teacherBusy.get(tid)?.get(d)?.has(slotsPerDay - 1)) {
+          lastSlotCount++;
+        }
+      });
+      
+      // عقوبة تزداد مع كل حصة أخيرة إضافية
+      if (lastSlotCount > 0) {
+        score += 300 * lastSlotCount;
+      } else {
+        // مكافأة صغيرة لأول حصة أخيرة (لا بد من توزيع بعضها)
+        score += 100;
+      }
+      
+      // عقوبة إضافية إذا كان التوزيع غير متوازن بين المعلمين
+      const totalTeachers = teachers.length;
+      const avgLastSlots = workingDays.length / Math.max(1, totalTeachers);
+      if (lastSlotCount > avgLastSlots * 1.2) {
+        // هذا المعلم لديه حصص أخيرة أكثر من العدل
+        score += 200;
+      }
+    } else {
+      // مكافأة صغيرة للحصص غير الأخيرة
+      score -= 15;
+    }
 
-    // 8. Bonus for days without this subject
+    // 9. MEDIUM NEW: تشجيع التوزيع المتوازن عبر الأسبوع
+    // فحص كم يوم دَرَّس فيه المعلم
+    const daysWorked = Array.from(teacherDayLoad.get(tid)?.keys() || []).length;
+    const totalDays = workingDays.length;
+    
+    // إذا لم يدرس في هذا اليوم بعد، أعطِ مكافأة
+    const hasWorkedToday = teacherDayLoad.get(tid)?.has(day) && 
+                           (teacherDayLoad.get(tid)?.get(day) || 0) > 0;
+    if (!hasWorkedToday && daysWorked < totalDays) {
+      // مكافأة لتوزيع المعلم على أيام جديدة
+      score -= 40;
+    }
+
+    // 10. Bonus for days without this subject
     if (subjCount === 0) score -= 50;
 
-    // 9. Small jitter
+    // 11. Small jitter
     score += Math.random() * 0.01;
     
     return score;
@@ -2747,9 +2839,18 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // Version History Button
-  document.getElementById('versionHistoryBtn')?.addEventListener('click', () => {
-    openVersionHistoryModal();
-  });
+  const versionBtn = document.getElementById('versionHistoryBtn');
+  if (versionBtn) {
+    versionBtn.addEventListener('click', (e) => {
+      console.log('Version History Button clicked!');
+      e.preventDefault();
+      e.stopPropagation();
+      openVersionHistoryModal();
+    });
+    console.log('Version History Button listener registered successfully');
+  } else {
+    console.error('Version History Button not found!');
+  }
 
   // Print
   document.getElementById('printBtn')?.addEventListener('click', () => {
@@ -3762,6 +3863,7 @@ function showVersionNotification(message, type = 'success') {
  * فتح مربع حوار سجل الإصدارات
  */
 function openVersionHistoryModal() {
+  console.log('openVersionHistoryModal called!');
   const st = loadState();
   
   // إنشاء مربع الحوار إذا لم يكن موجودًا
