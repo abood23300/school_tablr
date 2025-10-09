@@ -2756,6 +2756,409 @@ function renderCombinedByClass(assignments) {
   container.appendChild(wrap);
 }
 
+// ==========================================
+// Version History Functions (Global Scope)
+// ==========================================
+
+/**
+ * حفظ نسخة من الجدول الحالي مع الطابع الزمني
+ */
+function saveCurrentTimetableVersion() {
+  const st = loadState();
+  const assignments = getTimetable() || [];
+  
+  if (!assignments.length) return; // لا حفظ للجدول الفارغ
+  
+  // إنشاء الطابع الزمني
+  const now = new Date();
+  const timestamp = now.getTime();
+  
+  // تنسيق التاريخ والوقت بالعربية
+  const formatter = new Intl.DateTimeFormat('ar-SA', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+  const formattedDate = formatter.format(now);
+  
+  // إنشاء كائن الإصدار
+  const version = {
+    id: `v_${timestamp}`,
+    timestamp: timestamp,
+    dateLabel: formattedDate,
+    assignments: JSON.parse(JSON.stringify(assignments)), // نسخة عميقة
+    stats: calculateVersionStats(assignments)
+  };
+  
+  // إضافة الإصدار إلى المصفوفة
+  if (!st.savedVersions) {
+    st.savedVersions = [];
+  }
+  
+  // إضافة الإصدار الجديد في البداية
+  st.savedVersions.unshift(version);
+  
+  // الاحتفاظ بآخر 20 إصدارًا فقط
+  if (st.savedVersions.length > 20) {
+    st.savedVersions = st.savedVersions.slice(0, 20);
+  }
+  
+  // حفظ الحالة
+  saveState({ savedVersions: st.savedVersions });
+  
+  // تحديث واجهة سجل الإصدارات
+  renderVersionHistory();
+  
+  // إظهار رسالة نجاح
+  showVersionNotification('تم حفظ الجدول بنجاح ✓', 'success');
+}
+
+/**
+ * حساب إحصائيات الإصدار
+ */
+function calculateVersionStats(assignments) {
+  const st = loadState();
+  const sections = st.sections || [];
+  const teachers = st.teachers || [];
+  
+  let totalAssigned = assignments.length;
+  let unassignedCount = 0;
+  
+  // حساب الدروس غير المخصصة
+  (st.classes || []).forEach(cls => {
+    const secs = cls.sections && cls.sections.length ? cls.sections : [{ id: cls.id, name: cls.name }];
+    secs.forEach(sec => {
+      (st.subjects || []).forEach(sub => {
+        const capable = teachers.filter(t => {
+          const rec = (t.subjects || []).find(s => s.subjectId === sub.id);
+          return rec && rec.perSections && typeof rec.perSections[sec.id] === 'number' && rec.perSections[sec.id] > 0;
+        });
+        const totalPeriods = capable.reduce((acc, t) => {
+          const rec = t.subjects.find(s => s.subjectId === sub.id);
+          return acc + (rec.perSections[sec.id] || 0);
+        }, 0);
+        const assigned = assignments.filter(a =>
+          a.sectionId === sec.id &&
+          a.subjectId === sub.id
+        ).length;
+        if (assigned < totalPeriods) {
+          unassignedCount += (totalPeriods - assigned);
+        }
+      });
+    });
+  });
+  
+  return {
+    totalAssigned,
+    unassignedCount,
+    sectionsCount: sections.length,
+    teachersCount: teachers.length
+  };
+}
+
+/**
+ * عرض سجل الإصدارات في واجهة المستخدم
+ */
+function renderVersionHistory() {
+  const st = loadState();
+  const versions = st.savedVersions || [];
+  
+  const container = document.getElementById('versionHistoryContainer');
+  if (!container) return;
+  
+  if (!versions.length) {
+    container.innerHTML = `
+      <div style="text-align: center; padding: 40px; color: #9ca3af;">
+        <svg width="64" height="64" style="margin-bottom: 15px; opacity: 0.3;" fill="currentColor" viewBox="0 0 20 20">
+          <path d="M4 3a2 2 0 100 4h12a2 2 0 100-4H4z"/>
+          <path fill-rule="evenodd" d="M3 8h14v7a2 2 0 01-2 2H5a2 2 0 01-2-2V8zm5 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" clip-rule="evenodd"/>
+        </svg>
+        <p style="font-size: 16px;">لا توجد إصدارات محفوظة بعد</p>
+        <p style="font-size: 14px; margin-top: 5px;">قم بتوليد جدول لحفظ أول إصدار</p>
+      </div>
+    `;
+    return;
+  }
+  
+  let html = '<div style="max-height: 400px; overflow-y: auto;">';
+  
+  versions.forEach((ver, index) => {
+    const isLatest = index === 0;
+    html += `
+      <div class="version-item" data-version-id="${ver.id}" style="
+        border: 2px solid ${isLatest ? '#10b981' : '#e5e7eb'};
+        background: ${isLatest ? '#f0fdf4' : 'white'};
+        border-radius: 8px;
+        padding: 15px;
+        margin-bottom: 12px;
+        transition: all 0.2s;
+        cursor: pointer;
+      ">
+        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
+          <div style="flex: 1;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
+              ${isLatest ? '<span style="background: #10b981; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;">أحدث</span>' : ''}
+              <span style="color: #374151; font-weight: bold; font-size: 15px;">📅 ${ver.dateLabel}</span>
+            </div>
+            <div style="display: flex; gap: 15px; font-size: 13px; color: #6b7280; margin-top: 8px;">
+              <span>✓ ${ver.stats.totalAssigned} درس مخصص</span>
+              <span>⏳ ${ver.stats.unassignedCount} غير مخصص</span>
+              <span>📚 ${ver.stats.sectionsCount} صف</span>
+            </div>
+          </div>
+          <div style="display: flex; gap: 5px;">
+            <button class="load-version-btn" data-version-id="${ver.id}" style="
+              background: #3b82f6;
+              color: white;
+              border: none;
+              padding: 6px 12px;
+              border-radius: 5px;
+              cursor: pointer;
+              font-size: 13px;
+              transition: all 0.2s;
+            " title="تحميل هذا الإصدار">
+              📂 تحميل
+            </button>
+            ${!isLatest ? `<button class="delete-version-btn" data-version-id="${ver.id}" style="
+              background: #ef4444;
+              color: white;
+              border: none;
+              padding: 6px 12px;
+              border-radius: 5px;
+              cursor: pointer;
+              font-size: 13px;
+              transition: all 0.2s;
+            " title="حذف هذا الإصدار">
+              🗑️
+            </button>` : ''}
+          </div>
+        </div>
+      </div>
+    `;
+  });
+  
+  html += '</div>';
+  container.innerHTML = html;
+  
+  // إضافة event listeners
+  container.querySelectorAll('.load-version-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const versionId = btn.getAttribute('data-version-id');
+      loadTimetableVersion(versionId);
+    });
+    
+    btn.addEventListener('mouseenter', function() {
+      this.style.background = '#2563eb';
+      this.style.transform = 'scale(1.05)';
+    });
+    btn.addEventListener('mouseleave', function() {
+      this.style.background = '#3b82f6';
+      this.style.transform = 'scale(1)';
+    });
+  });
+  
+  container.querySelectorAll('.delete-version-btn').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const versionId = btn.getAttribute('data-version-id');
+      deleteTimetableVersion(versionId);
+    });
+    
+    btn.addEventListener('mouseenter', function() {
+      this.style.background = '#dc2626';
+      this.style.transform = 'scale(1.05)';
+    });
+    btn.addEventListener('mouseleave', function() {
+      this.style.background = '#ef4444';
+      this.style.transform = 'scale(1)';
+    });
+  });
+  
+  // نقرة على العنصر لتحميل الإصدار
+  container.querySelectorAll('.version-item').forEach(item => {
+    item.addEventListener('mouseenter', function() {
+      this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+      this.style.transform = 'translateY(-2px)';
+    });
+    item.addEventListener('mouseleave', function() {
+      this.style.boxShadow = 'none';
+      this.style.transform = 'translateY(0)';
+    });
+  });
+}
+
+/**
+ * تحميل إصدار محفوظ
+ */
+function loadTimetableVersion(versionId) {
+  const st = loadState();
+  const versions = st.savedVersions || [];
+  const version = versions.find(v => v.id === versionId);
+  
+  if (!version) {
+    showVersionNotification('الإصدار غير موجود!', 'error');
+    return;
+  }
+  
+  // تحميل التخصيصات من الإصدار
+  const assignments = JSON.parse(JSON.stringify(version.assignments)); // نسخة عميقة
+  setTimetable(assignments);
+  
+  // إعادة عرض الجدول
+  renderTimetableByClass(assignments);
+  renderStats();
+  renderFloatingUnassignedBox();
+  
+  // إظهار رسالة نجاح
+  showVersionNotification(`تم تحميل إصدار ${version.dateLabel} ✓`, 'success');
+  
+  // إغلاق مربع الحوار إذا كان مفتوحًا
+  const modal = document.getElementById('versionHistoryModal');
+  if (modal) {
+    modal.style.display = 'none';
+  }
+}
+
+/**
+ * حذف إصدار محفوظ
+ */
+function deleteTimetableVersion(versionId) {
+  if (!confirm('هل أنت متأكد من حذف هذا الإصدار؟')) return;
+  
+  const st = loadState();
+  let versions = st.savedVersions || [];
+  versions = versions.filter(v => v.id !== versionId);
+  
+  saveState({ savedVersions: versions });
+  renderVersionHistory();
+  
+  showVersionNotification('تم حذف الإصدار ✓', 'success');
+}
+
+/**
+ * إظهار إشعار للإصدارات
+ */
+function showVersionNotification(message, type = 'success') {
+  const existing = document.getElementById('versionNotification');
+  if (existing) existing.remove();
+  
+  const notification = document.createElement('div');
+  notification.id = 'versionNotification';
+  notification.style.cssText = `
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    padding: 15px 25px;
+    background: ${type === 'success' ? '#10b981' : '#ef4444'};
+    color: white;
+    border-radius: 8px;
+    font-size: 15px;
+    font-weight: bold;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 10000;
+    animation: slideIn 0.3s ease-out;
+  `;
+  notification.textContent = message;
+  document.body.appendChild(notification);
+  
+  setTimeout(() => {
+    notification.style.animation = 'slideOut 0.3s ease-in';
+    setTimeout(() => notification.remove(), 300);
+  }, 3000);
+}
+
+/**
+ * فتح مربع حوار سجل الإصدارات
+ */
+function openVersionHistoryModal() {
+  console.log('openVersionHistoryModal called!');
+  const st = loadState();
+  
+  // إنشاء مربع الحوار إذا لم يكن موجودًا
+  let modal = document.getElementById('versionHistoryModal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'versionHistoryModal';
+    modal.style.cssText = `
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      z-index: 9999;
+      align-items: center;
+      justify-content: center;
+    `;
+    
+    modal.innerHTML = `
+      <div style="
+        background: white;
+        border-radius: 12px;
+        width: 90%;
+        max-width: 700px;
+        max-height: 80vh;
+        overflow: hidden;
+        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      ">
+        <div style="
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          padding: 20px;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        ">
+          <h3 style="margin: 0; font-size: 20px;">📚 سجل إصدارات الجداول</h3>
+          <button id="closeVersionModal" style="
+            background: rgba(255,255,255,0.2);
+            border: none;
+            color: white;
+            font-size: 24px;
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+          ">×</button>
+        </div>
+        <div style="padding: 20px;">
+          <p style="color: #6b7280; margin-bottom: 20px; font-size: 14px;">
+            يتم حفظ كل جدول تقوم بتوليده تلقائيًا. يمكنك تحميل أي إصدار سابق أو حذفه.
+          </p>
+          <div id="versionHistoryContainer"></div>
+        </div>
+      </div>
+    `;
+    
+    document.body.appendChild(modal);
+    
+    // إغلاق عند النقر على الخلفية
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) {
+        modal.style.display = 'none';
+      }
+    });
+    
+    // زر الإغلاق
+    document.getElementById('closeVersionModal').addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+  }
+  
+  // عرض المربع وتحديث المحتوى
+  modal.style.display = 'flex';
+  renderVersionHistory();
+}
+
 // Wire buttons
 document.addEventListener('DOMContentLoaded', () => {
   const genBtn = document.getElementById('generateBtn');
@@ -3552,398 +3955,4 @@ function renderStats() {
       this.style.boxShadow = '0 4px 6px rgba(0,0,0,0.1)';
     });
   }
-
-// ==========================================
-// Version History Management
-// ==========================================
-
-/**
- * حفظ نسخة من الجدول الحالي مع الطابع الزمني
- */
-function saveCurrentTimetableVersion() {
-  const st = loadState();
-  const assignments = getTimetable() || [];
-  
-  if (!assignments.length) return; // لا حفظ للجدول الفارغ
-  
-  // إنشاء الطابع الزمني
-  const now = new Date();
-  const timestamp = now.getTime();
-  
-  // تنسيق التاريخ والوقت بالعربية
-  const formatter = new Intl.DateTimeFormat('ar-SA', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-    hour12: true
-  });
-  const formattedDate = formatter.format(now);
-  
-  // إنشاء كائن الإصدار
-  const version = {
-    id: `v_${timestamp}`,
-    timestamp: timestamp,
-    dateLabel: formattedDate,
-    assignments: JSON.parse(JSON.stringify(assignments)), // نسخة عميقة
-    stats: calculateVersionStats(assignments)
-  };
-  
-  // إضافة الإصدار إلى المصفوفة
-  if (!st.savedVersions) {
-    st.savedVersions = [];
-  }
-  
-  // إضافة الإصدار الجديد في البداية
-  st.savedVersions.unshift(version);
-  
-  // الاحتفاظ بآخر 20 إصدارًا فقط
-  if (st.savedVersions.length > 20) {
-    st.savedVersions = st.savedVersions.slice(0, 20);
-  }
-  
-  // حفظ الحالة
-  saveState({ savedVersions: st.savedVersions });
-  
-  // تحديث واجهة سجل الإصدارات
-  renderVersionHistory();
-  
-  // إظهار رسالة نجاح
-  showVersionNotification('تم حفظ الجدول بنجاح ✓', 'success');
-}
-
-/**
- * حساب إحصائيات الإصدار
- */
-function calculateVersionStats(assignments) {
-  const st = loadState();
-  const sections = st.sections || [];
-  const teachers = st.teachers || [];
-  
-  let totalAssigned = assignments.length;
-  let unassignedCount = 0;
-  
-  // حساب الدروس غير المخصصة
-  sections.forEach(sec => {
-    (sec.subjects || []).forEach(subj => {
-      const assigned = assignments.filter(a =>
-        a.sectionId === sec.id &&
-        a.subjectId === subj.subjectId &&
-        a.teacherId === subj.teacherId
-      ).length;
-      const needed = subj.lessonsPerWeek || 0;
-      if (assigned < needed) {
-        unassignedCount += (needed - assigned);
-      }
-    });
-  });
-  
-  return {
-    totalAssigned,
-    unassignedCount,
-    sectionsCount: sections.length,
-    teachersCount: teachers.length
-  };
-}
-
-/**
- * عرض سجل الإصدارات في واجهة المستخدم
- */
-function renderVersionHistory() {
-  const st = loadState();
-  const versions = st.savedVersions || [];
-  
-  const container = document.getElementById('versionHistoryContainer');
-  if (!container) return;
-  
-  if (!versions.length) {
-    container.innerHTML = `
-      <div style="text-align: center; padding: 40px; color: #9ca3af;">
-        <svg width="64" height="64" style="margin-bottom: 15px; opacity: 0.3;" fill="currentColor" viewBox="0 0 20 20">
-          <path d="M4 3a2 2 0 100 4h12a2 2 0 100-4H4z"/>
-          <path fill-rule="evenodd" d="M3 8h14v7a2 2 0 01-2 2H5a2 2 0 01-2-2V8zm5 3a1 1 0 011-1h2a1 1 0 110 2H9a1 1 0 01-1-1z" clip-rule="evenodd"/>
-        </svg>
-        <p style="font-size: 16px;">لا توجد إصدارات محفوظة بعد</p>
-        <p style="font-size: 14px; margin-top: 5px;">قم بتوليد جدول لحفظ أول إصدار</p>
-      </div>
-    `;
-    return;
-  }
-  
-  let html = '<div style="max-height: 400px; overflow-y: auto;">';
-  
-  versions.forEach((ver, index) => {
-    const isLatest = index === 0;
-    html += `
-      <div class="version-item" data-version-id="${ver.id}" style="
-        border: 2px solid ${isLatest ? '#10b981' : '#e5e7eb'};
-        background: ${isLatest ? '#f0fdf4' : 'white'};
-        border-radius: 8px;
-        padding: 15px;
-        margin-bottom: 12px;
-        transition: all 0.2s;
-        cursor: pointer;
-      ">
-        <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 10px;">
-          <div style="flex: 1;">
-            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 5px;">
-              ${isLatest ? '<span style="background: #10b981; color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold;">أحدث</span>' : ''}
-              <span style="color: #374151; font-weight: bold; font-size: 15px;">📅 ${ver.dateLabel}</span>
-            </div>
-            <div style="display: flex; gap: 15px; font-size: 13px; color: #6b7280; margin-top: 8px;">
-              <span>✓ ${ver.stats.totalAssigned} درس مخصص</span>
-              <span>⏳ ${ver.stats.unassignedCount} غير مخصص</span>
-              <span>📚 ${ver.stats.sectionsCount} صف</span>
-            </div>
-          </div>
-          <div style="display: flex; gap: 5px;">
-            <button class="load-version-btn" data-version-id="${ver.id}" style="
-              background: #3b82f6;
-              color: white;
-              border: none;
-              padding: 6px 12px;
-              border-radius: 5px;
-              cursor: pointer;
-              font-size: 13px;
-              transition: all 0.2s;
-            " title="تحميل هذا الإصدار">
-              📂 تحميل
-            </button>
-            ${!isLatest ? `<button class="delete-version-btn" data-version-id="${ver.id}" style="
-              background: #ef4444;
-              color: white;
-              border: none;
-              padding: 6px 12px;
-              border-radius: 5px;
-              cursor: pointer;
-              font-size: 13px;
-              transition: all 0.2s;
-            " title="حذف هذا الإصدار">
-              🗑️
-            </button>` : ''}
-          </div>
-        </div>
-      </div>
-    `;
-  });
-  
-  html += '</div>';
-  container.innerHTML = html;
-  
-  // إضافة event listeners
-  container.querySelectorAll('.load-version-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const versionId = btn.getAttribute('data-version-id');
-      loadTimetableVersion(versionId);
-    });
-    
-    btn.addEventListener('mouseenter', function() {
-      this.style.background = '#2563eb';
-      this.style.transform = 'scale(1.05)';
-    });
-    btn.addEventListener('mouseleave', function() {
-      this.style.background = '#3b82f6';
-      this.style.transform = 'scale(1)';
-    });
-  });
-  
-  container.querySelectorAll('.delete-version-btn').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const versionId = btn.getAttribute('data-version-id');
-      deleteTimetableVersion(versionId);
-    });
-    
-    btn.addEventListener('mouseenter', function() {
-      this.style.background = '#dc2626';
-      this.style.transform = 'scale(1.05)';
-    });
-    btn.addEventListener('mouseleave', function() {
-      this.style.background = '#ef4444';
-      this.style.transform = 'scale(1)';
-    });
-  });
-  
-  // نقرة على العنصر لتحميل الإصدار
-  container.querySelectorAll('.version-item').forEach(item => {
-    item.addEventListener('mouseenter', function() {
-      this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-      this.style.transform = 'translateY(-2px)';
-    });
-    item.addEventListener('mouseleave', function() {
-      this.style.boxShadow = 'none';
-      this.style.transform = 'translateY(0)';
-    });
-  });
-}
-
-/**
- * تحميل إصدار محفوظ
- */
-function loadTimetableVersion(versionId) {
-  const st = loadState();
-  const versions = st.savedVersions || [];
-  const version = versions.find(v => v.id === versionId);
-  
-  if (!version) {
-    showVersionNotification('الإصدار غير موجود!', 'error');
-    return;
-  }
-  
-  // تحميل التخصيصات من الإصدار
-  const assignments = JSON.parse(JSON.stringify(version.assignments)); // نسخة عميقة
-  setTimetable(assignments);
-  
-  // إعادة عرض الجدول
-  renderTimetableByClass(assignments);
-  renderStats();
-  renderFloatingUnassignedBox();
-  
-  // إظهار رسالة نجاح
-  showVersionNotification(`تم تحميل إصدار ${version.dateLabel} ✓`, 'success');
-  
-  // إغلاق مربع الحوار إذا كان مفتوحًا
-  const modal = document.getElementById('versionHistoryModal');
-  if (modal) {
-    modal.style.display = 'none';
-  }
-}
-
-/**
- * حذف إصدار محفوظ
- */
-function deleteTimetableVersion(versionId) {
-  if (!confirm('هل أنت متأكد من حذف هذا الإصدار؟')) return;
-  
-  const st = loadState();
-  let versions = st.savedVersions || [];
-  versions = versions.filter(v => v.id !== versionId);
-  
-  saveState({ savedVersions: versions });
-  renderVersionHistory();
-  
-  showVersionNotification('تم حذف الإصدار ✓', 'success');
-}
-
-/**
- * إظهار إشعار للإصدارات
- */
-function showVersionNotification(message, type = 'success') {
-  const existing = document.getElementById('versionNotification');
-  if (existing) existing.remove();
-  
-  const notification = document.createElement('div');
-  notification.id = 'versionNotification';
-  notification.style.cssText = `
-    position: fixed;
-    top: 20px;
-    right: 20px;
-    padding: 15px 25px;
-    background: ${type === 'success' ? '#10b981' : '#ef4444'};
-    color: white;
-    border-radius: 8px;
-    font-size: 15px;
-    font-weight: bold;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-    z-index: 10000;
-    animation: slideIn 0.3s ease-out;
-  `;
-  notification.textContent = message;
-  document.body.appendChild(notification);
-  
-  setTimeout(() => {
-    notification.style.animation = 'slideOut 0.3s ease-in';
-    setTimeout(() => notification.remove(), 300);
-  }, 3000);
-}
-
-/**
- * فتح مربع حوار سجل الإصدارات
- */
-function openVersionHistoryModal() {
-  console.log('openVersionHistoryModal called!');
-  const st = loadState();
-  
-  // إنشاء مربع الحوار إذا لم يكن موجودًا
-  let modal = document.getElementById('versionHistoryModal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'versionHistoryModal';
-    modal.style.cssText = `
-      display: none;
-      position: fixed;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background: rgba(0,0,0,0.5);
-      z-index: 9999;
-      align-items: center;
-      justify-content: center;
-    `;
-    
-    modal.innerHTML = `
-      <div style="
-        background: white;
-        border-radius: 12px;
-        width: 90%;
-        max-width: 700px;
-        max-height: 80vh;
-        overflow: hidden;
-        box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-      ">
-        <div style="
-          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-          color: white;
-          padding: 20px;
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-        ">
-          <h3 style="margin: 0; font-size: 20px;">📚 سجل إصدارات الجداول</h3>
-          <button id="closeVersionModal" style="
-            background: rgba(255,255,255,0.2);
-            border: none;
-            color: white;
-            font-size: 24px;
-            width: 32px;
-            height: 32px;
-            border-radius: 50%;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.2s;
-          ">×</button>
-        </div>
-        <div style="padding: 20px;">
-          <p style="color: #6b7280; margin-bottom: 20px; font-size: 14px;">
-            يتم حفظ كل جدول تقوم بتوليده تلقائيًا. يمكنك تحميل أي إصدار سابق أو حذفه.
-          </p>
-          <div id="versionHistoryContainer"></div>
-        </div>
-      </div>
-    `;
-    
-    document.body.appendChild(modal);
-    
-    // إغلاق عند النقر على الخلفية
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) {
-        modal.style.display = 'none';
-      }
-    });
-    
-    // زر الإغلاق
-    document.getElementById('closeVersionModal').addEventListener('click', () => {
-      modal.style.display = 'none';
-    });
-  }
-  
-  // عرض المربع وتحديث المحتوى
-  modal.style.display = 'flex';
-  renderVersionHistory();
-}
 }
