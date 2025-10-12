@@ -2194,6 +2194,9 @@ let draggedData = null;
 let copiedLessonData = null;
 let copiedIndicatorTimeout = null;
 
+// Constraint violation tracking
+let pendingDropAction = null;
+
 // Smart font sizing for combined view cells
 function getSmartFontSize(text) {
   const length = text.length;
@@ -2201,6 +2204,241 @@ function getSmartFontSize(text) {
   if (length <= 20) return '12px';      // نص متوسط: خط متوسط
   if (length <= 30) return '10px';      // نص طويل: خط صغير
   return '9px';                         // نص طويل جداً: خط صغير جداً
+}
+
+/**
+ * التحقق من القيود (أيام OFF، حصص ممنوعة، تضارب)
+ * @returns {Object} { hasViolation: boolean, reasons: string[] }
+ */
+function checkConstraintViolations(teacherId, day, slot, sectionId, assignments) {
+  const st = loadState();
+  const teachers = st.teachers || [];
+  const teacher = teachers.find(t => t.id === teacherId);
+  
+  const violations = {
+    hasViolation: false,
+    reasons: []
+  };
+  
+  if (!teacher) return violations;
+  
+  // 1. فحص أيام الـ OFF
+  if ((teacher.offDays || []).includes(day)) {
+    violations.hasViolation = true;
+    violations.reasons.push(`📅 يوم ${getDayNameArabic(day)} هو يوم OFF للمعلم ${teacher.name}`);
+  }
+  
+  // 2. فحص الحصص الممنوعة عموماً
+  if ((teacher.forbiddenSlots || []).includes(slot)) {
+    violations.hasViolation = true;
+    violations.reasons.push(`🚫 الحصة ${slot + 1} ممنوعة للمعلم ${teacher.name} في جميع الأيام`);
+  }
+  
+  // 3. فحص الحصص الممنوعة في أيام محددة
+  if (Array.isArray(teacher.forbiddenDaySlots) && teacher.forbiddenDaySlots.length) {
+    const rule = teacher.forbiddenDaySlots.find(r => r.day === day);
+    if (rule && Array.isArray(rule.slots) && rule.slots.includes(slot)) {
+      violations.hasViolation = true;
+      violations.reasons.push(`🚫 الحصة ${slot + 1} في يوم ${getDayNameArabic(day)} ممنوعة للمعلم ${teacher.name}`);
+    }
+  }
+  
+  // 4. فحص التضارب (نفس المعلم في نفس الوقت)
+  const conflict = assignments.find(a => 
+    a.teacherId === teacherId && 
+    a.day === day && 
+    parseInt(a.slot) === slot &&
+    a.sectionId !== sectionId
+  );
+  
+  if (conflict) {
+    const section = (st.sections || []).find(s => s.id === conflict.sectionId);
+    const sectionName = section ? section.name : 'غير معروف';
+    violations.hasViolation = true;
+    violations.reasons.push(`⚠️ يوجد تضارب: المعلم ${teacher.name} لديه درس في نفس الوقت مع صف ${sectionName}`);
+  }
+  
+  return violations;
+}
+
+/**
+ * الحصول على اسم اليوم بالعربية
+ */
+function getDayNameArabic(day) {
+  const dayNames = {
+    'sunday': 'الأحد',
+    'monday': 'الاثنين',
+    'tuesday': 'الثلاثاء',
+    'wednesday': 'الأربعاء',
+    'thursday': 'الخميس',
+    'friday': 'الجمعة',
+    'saturday': 'السبت'
+  };
+  return dayNames[day] || day;
+}
+
+/**
+ * إظهار مربع حوار تأكيد عند وجود قيود
+ */
+function showConstraintWarningDialog(violations, onConfirm, onCancel) {
+  // إنشاء مربع الحوار
+  const overlay = document.createElement('div');
+  overlay.id = 'constraintWarningOverlay';
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s ease-out;
+  `;
+  
+  const dialog = document.createElement('div');
+  dialog.style.cssText = `
+    background: white;
+    border-radius: 12px;
+    padding: 25px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    animation: slideInScale 0.3s ease-out;
+  `;
+  
+  // بناء قائمة الأسباب
+  const reasonsList = violations.reasons.map(reason => 
+    `<li style="margin-bottom: 10px; line-height: 1.6;">${reason}</li>`
+  ).join('');
+  
+  dialog.innerHTML = `
+    <div style="text-align: center; margin-bottom: 20px;">
+      <div style="
+        width: 60px;
+        height: 60px;
+        margin: 0 auto 15px;
+        background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 30px;
+      ">⚠️</div>
+      <h3 style="margin: 0; color: #dc2626; font-size: 20px;">تحذير: موقع محظور</h3>
+    </div>
+    
+    <div style="
+      background: #fef2f2;
+      border: 2px solid #fecaca;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 20px;
+    ">
+      <p style="margin: 0 0 10px 0; font-weight: bold; color: #991b1b;">
+        هذا الموقع محظور للأسباب التالية:
+      </p>
+      <ul style="margin: 0; padding-right: 20px; color: #7f1d1d;">
+        ${reasonsList}
+      </ul>
+    </div>
+    
+    <p style="
+      text-align: center;
+      color: #6b7280;
+      margin-bottom: 25px;
+      font-size: 15px;
+    ">
+      هل ترغب في الاستمرار رغم ذلك؟
+    </p>
+    
+    <div style="display: flex; gap: 10px; justify-content: center;">
+      <button id="constraintCancelBtn" style="
+        flex: 1;
+        padding: 12px 20px;
+        background: #6b7280;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.2s;
+      ">
+        ❌ تراجع
+      </button>
+      <button id="constraintConfirmBtn" style="
+        flex: 1;
+        padding: 12px 20px;
+        background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.2s;
+      ">
+        ✓ استمرار
+      </button>
+    </div>
+  `;
+  
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+  
+  // Hover effects
+  const cancelBtn = document.getElementById('constraintCancelBtn');
+  const confirmBtn = document.getElementById('constraintConfirmBtn');
+  
+  cancelBtn.addEventListener('mouseenter', function() {
+    this.style.background = '#4b5563';
+    this.style.transform = 'scale(1.05)';
+  });
+  cancelBtn.addEventListener('mouseleave', function() {
+    this.style.background = '#6b7280';
+    this.style.transform = 'scale(1)';
+  });
+  
+  confirmBtn.addEventListener('mouseenter', function() {
+    this.style.transform = 'scale(1.05)';
+    this.style.boxShadow = '0 8px 16px rgba(239, 68, 68, 0.3)';
+  });
+  confirmBtn.addEventListener('mouseleave', function() {
+    this.style.transform = 'scale(1)';
+    this.style.boxShadow = 'none';
+  });
+  
+  // Event listeners
+  cancelBtn.addEventListener('click', () => {
+    overlay.remove();
+    if (onCancel) onCancel();
+  });
+  
+  confirmBtn.addEventListener('click', () => {
+    overlay.remove();
+    if (onConfirm) onConfirm();
+  });
+  
+  // Close on overlay click
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) {
+      overlay.remove();
+      if (onCancel) onCancel();
+    }
+  });
+  
+  // ESC key to cancel
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      overlay.remove();
+      if (onCancel) onCancel();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
 }
 
 function handleDragStart(e) {
@@ -2280,71 +2518,103 @@ function handleDrop(e) {
     return false;
   }
   
-  // Check if target cell has existing assignment
-  const existingIndex = assignments.findIndex(a => 
-    a.day === targetDay && parseInt(a.slot) === targetSlot && a.sectionId === targetSectionId
-  );
-  
-  // Scenario 1: From unassigned card to empty cell
-  if (draggedData.source === 'unassigned' && existingIndex === -1) {
-    assignments.push({
-      teacherId: draggedData.teacherId,
-      subjectId: draggedData.subjectId,
-      sectionId: targetSectionId,
-      day: targetDay,
-      slot: targetSlot
-    });
-    draggedElement.remove();
-  }
-  // Scenario 2: From unassigned card to occupied cell (swap)
-  else if (draggedData.source === 'unassigned' && existingIndex !== -1) {
-    const oldAssignment = assignments[existingIndex];
-    assignments[existingIndex] = {
-      teacherId: draggedData.teacherId,
-      subjectId: draggedData.subjectId,
-      sectionId: targetSectionId,
-      day: targetDay,
-      slot: targetSlot
-    };
-    draggedElement.remove();
-    // Note: الحصة القديمة ستظهر تلقائياً في الإحصائيات عند إعادة العرض
-  }
-  // Scenario 3: From table cell to another cell (move or swap)
-  else if (draggedData.source === 'table') {
-    const sourceIndex = assignments.findIndex(a =>
-      a.day === draggedData.day && parseInt(a.slot) === parseInt(draggedData.slot) && a.sectionId === draggedData.sectionId
+  // تحضير الإجراء الذي سيتم تنفيذه
+  const performDrop = () => {
+    // Check if target cell has existing assignment
+    const existingIndex = assignments.findIndex(a => 
+      a.day === targetDay && parseInt(a.slot) === targetSlot && a.sectionId === targetSectionId
     );
     
-    if (sourceIndex !== -1) {
-      if (existingIndex === -1) {
-        // Move to empty cell
-        assignments[sourceIndex].day = targetDay;
-        assignments[sourceIndex].slot = targetSlot;
-        assignments[sourceIndex].sectionId = targetSectionId;
-      } else {
-        // Swap with existing cell
-        const temp = { ...assignments[existingIndex] };
-        assignments[existingIndex] = {
-          ...assignments[sourceIndex],
-          day: targetDay,
-          slot: targetSlot,
-          sectionId: targetSectionId
-        };
-        assignments[sourceIndex] = {
-          ...temp,
-          day: draggedData.day,
-          slot: draggedData.slot,
-          sectionId: draggedData.sectionId
-        };
+    // Scenario 1: From unassigned card to empty cell
+    if (draggedData.source === 'unassigned' && existingIndex === -1) {
+      assignments.push({
+        teacherId: draggedData.teacherId,
+        subjectId: draggedData.subjectId,
+        sectionId: targetSectionId,
+        day: targetDay,
+        slot: targetSlot
+      });
+      draggedElement.remove();
+    }
+    // Scenario 2: From unassigned card to occupied cell (swap)
+    else if (draggedData.source === 'unassigned' && existingIndex !== -1) {
+      const oldAssignment = assignments[existingIndex];
+      assignments[existingIndex] = {
+        teacherId: draggedData.teacherId,
+        subjectId: draggedData.subjectId,
+        sectionId: targetSectionId,
+        day: targetDay,
+        slot: targetSlot
+      };
+      draggedElement.remove();
+      // Note: الحصة القديمة ستظهر تلقائياً في الإحصائيات عند إعادة العرض
+    }
+    // Scenario 3: From table cell to another cell (move or swap)
+    else if (draggedData.source === 'table') {
+      const sourceIndex = assignments.findIndex(a =>
+        a.day === draggedData.day && parseInt(a.slot) === parseInt(draggedData.slot) && a.sectionId === draggedData.sectionId
+      );
+      
+      if (sourceIndex !== -1) {
+        if (existingIndex === -1) {
+          // Move to empty cell
+          assignments[sourceIndex].day = targetDay;
+          assignments[sourceIndex].slot = targetSlot;
+          assignments[sourceIndex].sectionId = targetSectionId;
+        } else {
+          // Swap with existing cell
+          const temp = { ...assignments[existingIndex] };
+          assignments[existingIndex] = {
+            ...assignments[sourceIndex],
+            day: targetDay,
+            slot: targetSlot,
+            sectionId: targetSectionId
+          };
+          assignments[sourceIndex] = {
+            ...temp,
+            day: draggedData.day,
+            slot: draggedData.slot,
+            sectionId: draggedData.sectionId
+          };
+        }
       }
     }
-  }
+    
+    // Save and re-render
+    setTimetable(assignments);
+    renderTimetableByClass(assignments);
+    renderStats();
+    renderFloatingUnassignedBox(); // تحديث الصندوق العائم
+  };
   
-  // Save and re-render
-  setTimetable(assignments);
-  renderTimetableByClass(assignments);
-  renderStats();
-  renderFloatingUnassignedBox(); // تحديث الصندوق العائم
+  // التحقق من القيود قبل الإفلات
+  const violations = checkConstraintViolations(
+    draggedData.teacherId,
+    targetDay,
+    targetSlot,
+    targetSectionId,
+    assignments
+  );
+  
+  if (violations.hasViolation) {
+    // عرض مربع التحذير
+    showConstraintWarningDialog(
+      violations,
+      () => {
+        // المستخدم وافق على الاستمرار
+        console.log('المستخدم اختار الاستمرار رغم القيود');
+        performDrop();
+      },
+      () => {
+        // المستخدم اختار التراجع
+        console.log('المستخدم اختار التراجع');
+        showNotification('❌ تم إلغاء العملية', 'error');
+      }
+    );
+  } else {
+    // لا توجد قيود، نفذ الإفلات مباشرة
+    performDrop();
+  }
   
   return false;
 }
@@ -2381,33 +2651,65 @@ function pasteLesson(targetCell, lessonData) {
   );
   
   if (existingIndex !== -1) {
-    alert('لا يمكن اللصق! الخلية مشغولة بالفعل.');
+    showNotification('❌ لا يمكن اللصق! الخلية مشغولة بالفعل.', 'error');
     return;
   }
   
-  // Add new assignment (نسخة جديدة من الدرس)
-  assignments.push({
-    teacherId: lessonData.teacherId,
-    subjectId: lessonData.subjectId,
-    sectionId: targetSectionId,
-    day: targetDay,
-    slot: targetSlot
-  });
+  // تحضير الإجراء الذي سيتم تنفيذه
+  const performPaste = () => {
+    // Add new assignment (نسخة جديدة من الدرس)
+    assignments.push({
+      teacherId: lessonData.teacherId,
+      subjectId: lessonData.subjectId,
+      sectionId: targetSectionId,
+      day: targetDay,
+      slot: targetSlot
+    });
+    
+    // Save and re-render
+    setTimetable(assignments);
+    renderTimetableByClass(assignments);
+    renderStats(); // تحديث الإحصائيات (سيزيد العدد الفعلي)
+    renderFloatingUnassignedBox();
+    
+    // Clear copied data and highlights
+    copiedLessonData = null;
+    removeEmptyCellsHighlight();
+    
+    // Show success message
+    showPasteFeedback(targetCell);
+    
+    console.log('تم لصق الدرس في:', targetDay, 'الحصة:', targetSlot + 1);
+  };
   
-  // Save and re-render
-  setTimetable(assignments);
-  renderTimetableByClass(assignments);
-  renderStats(); // تحديث الإحصائيات (سيزيد العدد الفعلي)
-  renderFloatingUnassignedBox();
+  // التحقق من القيود قبل اللصق
+  const violations = checkConstraintViolations(
+    lessonData.teacherId,
+    targetDay,
+    targetSlot,
+    targetSectionId,
+    assignments
+  );
   
-  // Clear copied data and highlights
-  copiedLessonData = null;
-  removeEmptyCellsHighlight();
-  
-  // Show success message
-  showPasteFeedback(targetCell);
-  
-  console.log('تم لصق الدرس في:', targetDay, 'الحصة:', targetSlot + 1);
+  if (violations.hasViolation) {
+    // عرض مربع التحذير
+    showConstraintWarningDialog(
+      violations,
+      () => {
+        // المستخدم وافق على الاستمرار
+        console.log('المستخدم اختار الاستمرار رغم القيود (لصق)');
+        performPaste();
+      },
+      () => {
+        // المستخدم اختار التراجع
+        console.log('المستخدم اختار التراجع (لصق)');
+        showNotification('❌ تم إلغاء اللصق', 'error');
+      }
+    );
+  } else {
+    // لا توجد قيود، نفذ اللصق مباشرة
+    performPaste();
+  }
 }
 
 function showCopyFeedback(element) {
