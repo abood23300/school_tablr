@@ -76,6 +76,13 @@ create policy "manage own projects while subscription valid"
 
 -- ملاحظات للاستخدام اليومي:
 --
+-- إنشاء حساب لمدرسة جديدة (التسجيل الذاتي معطّل عمدًا -- أنت فقط من ينشئ الحسابات):
+--   1) Supabase Dashboard -> Authentication -> Users -> Add user
+--   2) أدخل بريد المدرسة وكلمة مرور، وفعّل "Auto Confirm User" حتى تدخل مباشرة بلا حاجة لتأكيد بريد
+--   3) الـ trigger أعلاه سينشئ تلقائيًا صف اشتراك تجريبي لمدة 14 يومًا لهذا المستخدم
+--   4) (اختياري) عدّل اسم المدرسة والمدة من هنا:
+--      update public.subscriptions set school_name = 'اسم المدرسة' where user_id = '<uuid المستخدم>';
+--
 -- تمديد/تفعيل اشتراك مدرسة بعد الدفع:
 --   update public.subscriptions set status = 'active' where user_id = '<uuid المستخدم>';
 --
@@ -84,3 +91,7 @@ create policy "manage own projects while subscription valid"
 --
 -- إيجاد uuid مستخدم عبر بريده الإلكتروني:
 --   select id, email from auth.users where email = 'someone@example.com';
+--
+-- تعطيل التسجيل الذاتي من طرف الخادم أيضًا (وليس فقط بإخفاء الزر من الواجهة):
+--   Authentication -> Sign In / Providers -> Email -> أطفئ "Allow new users to sign up"
+--   هذا يمنع أي شخص من استدعاء signUp() مباشرة عبر الشبكة متجاوزًا الواجهة.

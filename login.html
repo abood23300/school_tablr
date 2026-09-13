@@ -8,11 +8,7 @@
     <style>
       .auth-wrap { min-height: 100vh; display:flex; align-items:center; justify-content:center; padding: 16px; }
       .auth-card { width: 100%; max-width: 380px; }
-      .auth-tabs { display:flex; gap:8px; margin-bottom: 16px; }
-      .auth-tabs button { flex:1; }
-      .auth-tabs button.active { background:#eef2ff; border-color:#c7d2fe; font-weight:700; }
-      .auth-form { display:none; flex-direction:column; gap:12px; }
-      .auth-form.active { display:flex; }
+      .auth-form { display:flex; flex-direction:column; gap:12px; }
       .auth-msg { border-radius:8px; padding:10px 12px; font-size:14px; display:none; }
       .auth-msg.show { display:block; }
       .auth-msg.error { background:#fef2f2; color:#b91c1c; border:1px solid #fecaca; }
@@ -25,16 +21,11 @@
     <div class="auth-wrap">
       <div class="card auth-card">
         <h2 class="auth-title">🎓 منشئ جدول الدروس</h2>
-        <p class="auth-sub">سجّل دخولك أو أنشئ حسابًا جديدًا (تجربة مجانية 14 يومًا)</p>
-
-        <div class="auth-tabs">
-          <button type="button" id="tabLoginBtn" class="btn active" data-target="loginForm">تسجيل الدخول</button>
-          <button type="button" id="tabSignupBtn" class="btn" data-target="signupForm">حساب جديد</button>
-        </div>
+        <p class="auth-sub">سجّل الدخول ببيانات الحساب الذي أُنشئ لمدرستك</p>
 
         <div id="authMsg" class="auth-msg"></div>
 
-        <form id="loginForm" class="auth-form active">
+        <form id="loginForm" class="auth-form">
           <div class="form-row">
             <label for="loginEmail">البريد الإلكتروني</label>
             <input type="email" id="loginEmail" required autocomplete="email" />
@@ -44,22 +35,6 @@
             <input type="password" id="loginPassword" required autocomplete="current-password" minlength="6" />
           </div>
           <button type="submit" id="loginSubmitBtn" class="primary">دخول</button>
-        </form>
-
-        <form id="signupForm" class="auth-form">
-          <div class="form-row">
-            <label for="signupSchoolName">اسم المدرسة</label>
-            <input type="text" id="signupSchoolName" required />
-          </div>
-          <div class="form-row">
-            <label for="signupEmail">البريد الإلكتروني</label>
-            <input type="email" id="signupEmail" required autocomplete="email" />
-          </div>
-          <div class="form-row">
-            <label for="signupPassword">كلمة المرور</label>
-            <input type="password" id="signupPassword" required autocomplete="new-password" minlength="6" />
-          </div>
-          <button type="submit" id="signupSubmitBtn" class="primary">إنشاء حساب وبدء التجربة</button>
         </form>
       </div>
     </div>
