@@ -8,6 +8,7 @@
   </head>
   <body>
     <header class="app-header">
+      <div id="authBar" class="auth-bar"></div>
       <h1>منشئ جدول الدروس الأسبوعي</h1>
       <div class="projects-bar">
         <label for="projectSelect" class="proj-label">المشاريع:</label>
@@ -231,6 +232,9 @@
       <div>وقت بدء العمل بالجدول: <span id="startedAt">—</span></div>
     </footer>
 
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+    <script src="./js/supabase-client.js"></script>
+    <script src="./js/auth-gate.js"></script>
     <script src="./js/app.js"></script>
   </body>
   </html>

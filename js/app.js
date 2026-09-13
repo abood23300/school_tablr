@@ -1498,7 +1498,10 @@ function generateTimetable() {
     });
     teacherSubjectRemaining.set(t.id, subjMap);
     teacherTotalLoad.set(t.id, totalLoad);
-    const idealDaily = workingDays.length ? (totalLoad / workingDays.length) : totalLoad;
+    // احسب عدد الأيام المتاحة فعلياً للمعلم (باستثناء أيام الـ OFF) حتى يكون
+    // معدل الحمل اليومي المثالي واقعياً، لا مبنياً على كل أيام الأسبوع
+    const availableDaysCount = workingDays.filter(d => !(t.offDays || []).includes(d)).length || workingDays.length || 1;
+    const idealDaily = availableDaysCount ? (totalLoad / availableDaysCount) : totalLoad;
     teacherIdealDailyLoad.set(t.id, idealDaily);
     const catIdealMap = new Map();
     uniqueSlotCategories.forEach(cat => {
@@ -1708,11 +1711,18 @@ function generateTimetable() {
     score += classDayLoad * 5;
 
     // 4. Balance teacher load across days
+    // ملاحظة مهمة: يجب أن تُفضَّل الأيام الأقل ازدحاماً بشكل متصاعد وحصري،
+    // وليس فقط "الأقرب إلى المعدل المثالي". الصيغة القديمة كانت تفضّل أحياناً
+    // يوماً شبه ممتلئ (قريب من المعدل) على يوم فارغ تماماً، مما يسبب تكديس
+    // عدة حصص للمعلم في يوم واحد وترك أيام أخرى شبه فارغة.
     const tLoad = teacherDayLoad.get(tid)?.get(day) || 0;
     const idealDaily = teacherIdealDailyLoad.get(tid) || 0;
-    const projectedDiff = Math.abs(tLoad + 1 - idealDaily);
-    score += projectedDiff * 90;
-    if (tLoad < idealDaily) score -= Math.min(idealDaily - tLoad, 1) * 35;
+    const dailyCap = Math.max(1, Math.ceil(idealDaily));
+    // عقوبة متصاعدة تفضّل دائماً اليوم الأقل عدد حصص حتى الآن (توزيع دوري عادل)
+    score += tLoad * 120;
+    // عقوبة إضافية وقوية جداً إذا تجاوزت الحصة الجديدة الحصة العادلة لليوم (تصاعدية مع الزيادة)
+    const overCap = (tLoad + 1) - dailyCap;
+    if (overCap > 0) score += 700 * Math.pow(overCap, 1.5);
 
     // 5. CRITICAL NEW: تجنب 3+ دروس في نفس اليوم لنفس الصف للمعلم
     // هذا يمنع المعلم من تدريس نفس الصف 3 مرات أو أكثر في يوم واحد
@@ -2207,6 +2217,38 @@ function getSmartFontSize(text) {
 }
 
 /**
+ * إيجاد الصف (المرحلة) الذي تنتمي إليه شعبة معيّنة، مثال: شعبتا "الخامس أ" و"الخامس ب"
+ * تنتميان لنفس classId، بينما "الخامس" و"السادس" لهما classId مختلف
+ */
+function findClassIdForSection(st, sectionId) {
+  const classes = st.classes || [];
+  for (const cls of classes) {
+    if (cls.sections && cls.sections.length) {
+      if (cls.sections.some(sec => sec.id === sectionId)) return cls.id;
+    } else if (cls.id === sectionId) {
+      return cls.id;
+    }
+  }
+  return null;
+}
+
+/**
+ * إيجاد اسم شعبة بمعرفها للعرض في رسائل التحقق من القيود
+ */
+function findSectionName(st, sectionId) {
+  const classes = st.classes || [];
+  for (const cls of classes) {
+    if (cls.sections && cls.sections.length) {
+      const sec = cls.sections.find(s => s.id === sectionId);
+      if (sec) return sec.name;
+    } else if (cls.id === sectionId) {
+      return cls.name;
+    }
+  }
+  return null;
+}
+
+/**
  * التحقق من القيود (أيام OFF، حصص ممنوعة، تضارب)
  * @returns {Object} { hasViolation: boolean, reasons: string[] }
  */
@@ -2214,12 +2256,13 @@ function checkConstraintViolations(teacherId, day, slot, sectionId, assignments)
   const st = loadState();
   const teachers = st.teachers || [];
   const teacher = teachers.find(t => t.id === teacherId);
-  
+
   const violations = {
     hasViolation: false,
+    hasHardConflict: false, // تضارب حقيقي بين مرحلتين مختلفتين (نفس المعلم بمكانين بنفس الوقت) - غير قابل للتجاوز
     reasons: []
   };
-  
+
   if (!teacher) return violations;
   
   // 1. فحص أيام الـ OFF
@@ -2252,12 +2295,24 @@ function checkConstraintViolations(teacherId, day, slot, sectionId, assignments)
   );
   
   if (conflict) {
-    const section = (st.sections || []).find(s => s.id === conflict.sectionId);
-    const sectionName = section ? section.name : 'غير معروف';
+    const sectionName = findSectionName(st, conflict.sectionId) || 'غير معروف';
     violations.hasViolation = true;
-    violations.reasons.push(`⚠️ يوجد تضارب: المعلم ${teacher.name} لديه درس في نفس الوقت مع صف ${sectionName}`);
+
+    // نسمح بتعارض المعلم بين شعبتين من نفس المرحلة فقط (مثال: الخامس أ والخامس ب)
+    // لأن بعض المدارس تدمج شعبتين بنفس الوقت عند نقص عدد المعلمين. أما التعارض
+    // بين مرحلتين مختلفتين (مثال: الخامس والسادس) فمستحيل فعلياً ويُمنع منعاً باتاً
+    const currentClassId = findClassIdForSection(st, sectionId);
+    const conflictClassId = findClassIdForSection(st, conflict.sectionId);
+    const sameGrade = currentClassId !== null && currentClassId === conflictClassId;
+
+    if (sameGrade) {
+      violations.reasons.push(`ℹ️ دمج شعبتين: المعلم ${teacher.name} لديه أيضاً درس مع شعبة ${sectionName} من نفس المرحلة في نفس الوقت`);
+    } else {
+      violations.hasHardConflict = true;
+      violations.reasons.push(`⚠️ تضارب: المعلم ${teacher.name} لديه درس آخر في نفس الوقت مع صف ${sectionName}`);
+    }
   }
-  
+
   return violations;
 }
 
@@ -2275,6 +2330,128 @@ function getDayNameArabic(day) {
     'saturday': 'السبت'
   };
   return dayNames[day] || day;
+}
+
+/**
+ * إظهار مربع حوار حظر (بدون خيار المتابعة) عند وجود تضارب حقيقي
+ * التضارب الحقيقي (معلم بمكانين بنفس الوقت) مستحيل فعلياً، لذا يُمنع منعاً باتاً
+ * ولا يُعرض خيار "استمرار رغم ذلك" كما في القيود التفضيلية (OFF/حصص ممنوعة)
+ */
+function showHardConflictBlockedDialog(violations, onClose) {
+  const overlay = document.createElement('div');
+  overlay.id = 'hardConflictOverlay';
+  overlay.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    animation: fadeIn 0.2s ease-out;
+  `;
+
+  const dialog = document.createElement('div');
+  dialog.style.cssText = `
+    background: white;
+    border-radius: 12px;
+    padding: 25px;
+    max-width: 500px;
+    width: 90%;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    animation: slideInScale 0.3s ease-out;
+  `;
+
+  const reasonsList = violations.reasons.map(reason =>
+    `<li style="margin-bottom: 10px; line-height: 1.6;">${reason}</li>`
+  ).join('');
+
+  dialog.innerHTML = `
+    <div style="text-align: center; margin-bottom: 20px;">
+      <div style="
+        width: 60px;
+        height: 60px;
+        margin: 0 auto 15px;
+        background: linear-gradient(135deg, #dc2626 0%, #7f1d1d 100%);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 30px;
+      ">⛔</div>
+      <h3 style="margin: 0; color: #dc2626; font-size: 20px;">غير ممكن: تعارض في الجدول</h3>
+    </div>
+
+    <div style="
+      background: #fef2f2;
+      border: 2px solid #fecaca;
+      border-radius: 8px;
+      padding: 15px;
+      margin-bottom: 20px;
+    ">
+      <ul style="margin: 0; padding-right: 20px; color: #7f1d1d;">
+        ${reasonsList}
+      </ul>
+    </div>
+
+    <p style="
+      text-align: center;
+      color: #6b7280;
+      margin-bottom: 25px;
+      font-size: 15px;
+    ">
+      لا يمكن لمعلم واحد أن يكون في حصتين في نفس الوقت. اختر خانة أو وقتاً آخر.
+    </p>
+
+    <div style="display: flex; justify-content: center;">
+      <button id="hardConflictOkBtn" style="
+        padding: 12px 30px;
+        background: #dc2626;
+        color: white;
+        border: none;
+        border-radius: 8px;
+        font-size: 15px;
+        font-weight: bold;
+        cursor: pointer;
+        transition: all 0.2s;
+      ">
+        حسناً
+      </button>
+    </div>
+  `;
+
+  overlay.appendChild(dialog);
+  document.body.appendChild(overlay);
+
+  const okBtn = document.getElementById('hardConflictOkBtn');
+  okBtn.addEventListener('mouseenter', function() {
+    this.style.background = '#991b1b';
+    this.style.transform = 'scale(1.05)';
+  });
+  okBtn.addEventListener('mouseleave', function() {
+    this.style.background = '#dc2626';
+    this.style.transform = 'scale(1)';
+  });
+
+  const close = () => {
+    overlay.remove();
+    if (onClose) onClose();
+  };
+
+  okBtn.addEventListener('click', close);
+  overlay.addEventListener('click', (e) => {
+    if (e.target === overlay) close();
+  });
+  const escHandler = (e) => {
+    if (e.key === 'Escape') {
+      close();
+      document.removeEventListener('keydown', escHandler);
+    }
+  };
+  document.addEventListener('keydown', escHandler);
 }
 
 /**
@@ -2310,41 +2487,57 @@ function showConstraintWarningDialog(violations, onConfirm, onCancel) {
   `;
   
   // بناء قائمة الأسباب
-  const reasonsList = violations.reasons.map(reason => 
+  const reasonsList = violations.reasons.map(reason =>
     `<li style="margin-bottom: 10px; line-height: 1.6;">${reason}</li>`
   ).join('');
-  
+
+  // إذا كانت كل الأسباب من نوع "دمج شعبتين من نفس المرحلة" فقط، فهذا سيناريو
+  // متعمد ومسموح به في بعض المدارس (نقص عدد المعلمين)، لذا نعرضه بأسلوب معلوماتي
+  // هادئ بدل أسلوب "تحذير/محظور" المخصص لمخالفة القيود التفضيلية
+  const isInfoOnly = violations.reasons.length > 0 && violations.reasons.every(r => r.startsWith('ℹ️'));
+  const iconBg = isInfoOnly ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)';
+  const icon = isInfoOnly ? 'ℹ️' : '⚠️';
+  const titleColor = isInfoOnly ? '#1d4ed8' : '#dc2626';
+  const titleText = isInfoOnly ? 'ملاحظة: دمج شعبتين بنفس الوقت' : 'تحذير: موقع محظور';
+  const boxBg = isInfoOnly ? '#eff6ff' : '#fef2f2';
+  const boxBorder = isInfoOnly ? '#bfdbfe' : '#fecaca';
+  const boxTextColor = isInfoOnly ? '#1e40af' : '#991b1b';
+  const listTextColor = isInfoOnly ? '#1e3a8a' : '#7f1d1d';
+  const boxTitle = isInfoOnly ? 'لاحظنا ما يلي:' : 'هذا الموقع محظور للأسباب التالية:';
+  const confirmBg = isInfoOnly ? 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)' : 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)';
+  const confirmLabel = isInfoOnly ? '✓ متابعة' : '✓ استمرار';
+
   dialog.innerHTML = `
     <div style="text-align: center; margin-bottom: 20px;">
       <div style="
         width: 60px;
         height: 60px;
         margin: 0 auto 15px;
-        background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+        background: ${iconBg};
         border-radius: 50%;
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 30px;
-      ">⚠️</div>
-      <h3 style="margin: 0; color: #dc2626; font-size: 20px;">تحذير: موقع محظور</h3>
+      ">${icon}</div>
+      <h3 style="margin: 0; color: ${titleColor}; font-size: 20px;">${titleText}</h3>
     </div>
-    
+
     <div style="
-      background: #fef2f2;
-      border: 2px solid #fecaca;
+      background: ${boxBg};
+      border: 2px solid ${boxBorder};
       border-radius: 8px;
       padding: 15px;
       margin-bottom: 20px;
     ">
-      <p style="margin: 0 0 10px 0; font-weight: bold; color: #991b1b;">
-        هذا الموقع محظور للأسباب التالية:
+      <p style="margin: 0 0 10px 0; font-weight: bold; color: ${boxTextColor};">
+        ${boxTitle}
       </p>
-      <ul style="margin: 0; padding-right: 20px; color: #7f1d1d;">
+      <ul style="margin: 0; padding-right: 20px; color: ${listTextColor};">
         ${reasonsList}
       </ul>
     </div>
-    
+
     <p style="
       text-align: center;
       color: #6b7280;
@@ -2353,7 +2546,7 @@ function showConstraintWarningDialog(violations, onConfirm, onCancel) {
     ">
       هل ترغب في الاستمرار رغم ذلك؟
     </p>
-    
+
     <div style="display: flex; gap: 10px; justify-content: center;">
       <button id="constraintCancelBtn" style="
         flex: 1;
@@ -2372,7 +2565,7 @@ function showConstraintWarningDialog(violations, onConfirm, onCancel) {
       <button id="constraintConfirmBtn" style="
         flex: 1;
         padding: 12px 20px;
-        background: linear-gradient(135deg, #f59e0b 0%, #ef4444 100%);
+        background: ${confirmBg};
         color: white;
         border: none;
         border-radius: 8px;
@@ -2381,14 +2574,14 @@ function showConstraintWarningDialog(violations, onConfirm, onCancel) {
         cursor: pointer;
         transition: all 0.2s;
       ">
-        ✓ استمرار
+        ${confirmLabel}
       </button>
     </div>
   `;
-  
+
   overlay.appendChild(dialog);
   document.body.appendChild(overlay);
-  
+
   // Hover effects
   const cancelBtn = document.getElementById('constraintCancelBtn');
   const confirmBtn = document.getElementById('constraintConfirmBtn');
@@ -2587,7 +2780,7 @@ function handleDrop(e) {
     renderFloatingUnassignedBox(); // تحديث الصندوق العائم
   };
   
-  // التحقق من القيود قبل الإفلات
+  // التحقق من القيود قبل الإفلات (الحركة الأساسية: معلم الدرس المسحوب إلى الخانة الهدف)
   const violations = checkConstraintViolations(
     draggedData.teacherId,
     targetDay,
@@ -2595,11 +2788,39 @@ function handleDrop(e) {
     targetSectionId,
     assignments
   );
-  
-  if (violations.hasViolation) {
-    // عرض مربع التحذير
+
+  // في حال المبادلة بين خليتين (سحب من الجدول إلى خلية مشغولة)، يجب أيضاً التحقق
+  // من الاتجاه المعاكس: انتقال معلم الدرس الموجود في الخانة الهدف إلى مكان الدرس المسحوب،
+  // لأن هذا الانتقال قد يخلق تضارباً لم يكن ظاهراً من فحص الاتجاه الأول وحده
+  let reverseViolations = null;
+  if (draggedData.source === 'table') {
+    const existingAtTarget = assignments.find(a =>
+      a.day === targetDay && parseInt(a.slot) === targetSlot && a.sectionId === targetSectionId
+    );
+    if (existingAtTarget) {
+      reverseViolations = checkConstraintViolations(
+        existingAtTarget.teacherId,
+        draggedData.day,
+        parseInt(draggedData.slot),
+        draggedData.sectionId,
+        assignments
+      );
+    }
+  }
+
+  const combinedHasHardConflict = !!(violations.hasHardConflict || reverseViolations?.hasHardConflict);
+  const combinedHasViolation = !!(violations.hasViolation || reverseViolations?.hasViolation);
+  const combinedReasons = [...violations.reasons, ...(reverseViolations?.reasons || [])];
+
+  if (combinedHasHardConflict) {
+    // تضارب حقيقي (نفس المعلم بمكانين بنفس الوقت): يُمنع منعاً باتاً، لا خيار للمتابعة
+    showHardConflictBlockedDialog({ reasons: combinedReasons }, () => {
+      showNotification('❌ تم إلغاء العملية بسبب تضارب في الجدول', 'error');
+    });
+  } else if (combinedHasViolation) {
+    // قيود تفضيلية فقط (يوم OFF / حصة ممنوعة): تحذير قابل للتجاوز
     showConstraintWarningDialog(
-      violations,
+      { hasViolation: combinedHasViolation, reasons: combinedReasons },
       () => {
         // المستخدم وافق على الاستمرار
         console.log('المستخدم اختار الاستمرار رغم القيود');
@@ -2615,7 +2836,7 @@ function handleDrop(e) {
     // لا توجد قيود، نفذ الإفلات مباشرة
     performDrop();
   }
-  
+
   return false;
 }
 
@@ -2691,7 +2912,12 @@ function pasteLesson(targetCell, lessonData) {
     assignments
   );
   
-  if (violations.hasViolation) {
+  if (violations.hasHardConflict) {
+    // تضارب حقيقي: يُمنع منعاً باتاً بدون خيار المتابعة
+    showHardConflictBlockedDialog(violations, () => {
+      showNotification('❌ تم إلغاء اللصق بسبب تضارب في الجدول', 'error');
+    });
+  } else if (violations.hasViolation) {
     // عرض مربع التحذير
     showConstraintWarningDialog(
       violations,
